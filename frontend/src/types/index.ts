@@ -31,42 +31,20 @@ export interface Message {
   created_at: string;
 }
 
-// ─── Metric Value ──────────────────────────────────────────────────────
+// ─── Completeness Detail ───────────────────────────────────────────────
 
-export interface MetricValue {
-  code: string;
-  label: string;
-  raw_text: string;
-  status: "provided" | "unavailable";
-  numeric_value: number | null;
-  range_min: number | null;
-  range_max: number | null;
-  unit: string | null;
-  period: string | null;
-  confidence: number;
-}
-
-// ─── Score Detail ──────────────────────────────────────────────────────
-
-export interface ScoreDetail {
+export interface CompletenessDetail {
   score: number;
-  core_complete: boolean;
-  core_provided_count: number;
-  secondary_coverage: number;
-  anomaly_complete: boolean;
-  missing_core: string[];
-  missing_secondary: string[];
-  unresolved_anomalies: string[];
-  can_limited_diagnose: boolean;
-  passed: boolean;
+  summary: string;
+  missing_aspects: string[];
 }
 
 // ─── Session Detail ────────────────────────────────────────────────────
 
 export interface SessionDetail extends SessionSummary {
   scene: Record<string, string>;
-  metrics: Record<string, MetricValue>;
-  score_detail: ScoreDetail;
+  raw_facts: string[];
+  completeness: CompletenessDetail;
   waiting_for_input: boolean;
   error_message: string | null;
   messages: Message[];
@@ -92,12 +70,6 @@ export interface ReportResponse {
 
 // ─── Meta ──────────────────────────────────────────────────────────────
 
-export interface IndustryDef {
-  code: string;
-  label: string;
-  description: string;
-}
-
 export interface MetricDef {
   code: string;
   label: string;
@@ -105,12 +77,6 @@ export interface MetricDef {
   description: string;
   unit: string;
   is_core: boolean;
-}
-
-export interface MetaResponse {
-  industries: IndustryDef[];
-  core_metrics: MetricDef[];
-  llm_mode: string;
 }
 
 // ─── SSE Events ────────────────────────────────────────────────────────
@@ -178,11 +144,10 @@ export type SSEEvent =
 export type DiagnosisStage =
   | "init"
   | "scene_recognize"
-  | "collect_metrics"
-  | "check_complete"
-  | "exception_ask"
+  | "greeting_guide"
+  | "chat_extract"
+  | "agent_reply"
   | "await_input"
-  | "diagnosis_analysis"
   | "generate_report"
   | "complete"
   | "error";
@@ -224,10 +189,9 @@ export interface StageLabels {
 export const STAGE_LABELS: StageLabels = {
   init: "初始化",
   scene_recognize: "识别行业场景...",
-  collect_metrics: "提取运营指标...",
-  check_complete: "评估信息完备度...",
-  exception_ask: "生成补充问题...",
+  greeting_guide: "自我介绍...",
+  chat_extract: "分析对话...",
+  agent_reply: "思考中...",
   await_input: "等待您的回复",
-  diagnosis_analysis: "六维度诊断分析中...",
   generate_report: "生成诊断报告...",
 };

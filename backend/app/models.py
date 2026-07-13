@@ -35,11 +35,11 @@ class DiagnosisSession(Base):
     title = Column(String, nullable=False, default="新的运营诊断")
     status = Column(String, nullable=False, default="collecting")  # collecting|analyzing|completed|failed
     stage = Column(String, nullable=False, default="init")
-    scene = Column(Text, default="{}")          # JSON
-    metrics = Column(Text, default="{}")         # JSON
-    anomalies = Column(Text, default="[]")       # JSON
-    score = Column(Integer, nullable=False, default=0)
-    score_detail = Column(Text, default="{}")    # JSON
+    scene = Column(Text, default="{}")          # JSON: industry/stage/mode info
+    metrics = Column(Text, default="[]")         # JSON: raw_facts list (repurposed from structured metrics)
+    anomalies = Column(Text, default="[]")       # JSON: anomaly contexts
+    score = Column(Integer, nullable=False, default=0)  # completeness score from LLM
+    score_detail = Column(Text, default="{}")    # JSON: {score, summary, missing_aspects}
     asked_codes = Column(Text, default="[]")     # JSON
     waiting_for_input = Column(Boolean, nullable=False, default=False)
     force_diagnosis = Column(Boolean, nullable=False, default=False)

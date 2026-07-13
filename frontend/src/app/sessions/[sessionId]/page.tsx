@@ -45,11 +45,12 @@ export default function SessionPage() {
     if (sessionId) {
       sessionsHook.setActiveId(sessionId);
       diagnosis.loadSession(sessionId);
-    }
-    // Cleanup on unmount or session change
-    return () => {
+    } else {
+      // Navigating away from any session — full reset.
       diagnosis.reset();
-    };
+    }
+    // No reset in cleanup — loadSession keeps old content visible until
+    // new data arrives, preventing a flash to empty state on session switch.
   }, [sessionId]);
 
   // When sessions list changes, ensure activeId is reflected
@@ -76,8 +77,8 @@ export default function SessionPage() {
   }, [sessionsHook, router]);
 
   const handleDeleteSession = useCallback(
-    (id: string) => {
-      sessionsHook.remove(id);
+    async (id: string) => {
+      await sessionsHook.remove(id);
       if (id === sessionId) {
         router.push("/");
       }
@@ -94,20 +95,15 @@ export default function SessionPage() {
     [diagnosis],
   );
 
-  const handleForceDiagnose = useCallback(() => {
+  const handleGenerateReport = useCallback(() => {
     diagnosis.sendMessage("", "diagnose_with_current_data");
   }, [diagnosis]);
 
   // ─── Derived State ────────────────────────────────────────────────────
 
-  const canForceDiagnose = useMemo(() => {
-    const sd = diagnosis.scoreDetail;
-    return sd?.can_limited_diagnose === true && !diagnosis.streaming;
-  }, [diagnosis.scoreDetail, diagnosis.streaming]);
-
   const progressScore = useMemo(() => {
-    return diagnosis.scoreDetail?.score ?? diagnosis.session?.score ?? 0;
-  }, [diagnosis.scoreDetail, diagnosis.session]);
+    return diagnosis.completeness?.score ?? diagnosis.session?.score ?? 0;
+  }, [diagnosis.completeness, diagnosis.session]);
 
   // ─── Render ────────────────────────────────────────────────────────────
 
@@ -138,13 +134,6 @@ export default function SessionPage() {
             <TabButton
               active={activeTab === "chat"}
               onClick={() => setActiveTab("chat")}
-              badge={
-                diagnosis.session?.status === "collecting"
-                  ? diagnosis.messages.length > 0
-                    ? "进行中"
-                    : undefined
-                  : undefined
-              }
             >
               对话
             </TabButton>
@@ -156,12 +145,15 @@ export default function SessionPage() {
                   diagnosis.loadReport();
                 }
               }}
-              badge={diagnosis.hasReport ? undefined : undefined}
+              loading={diagnosis.reportLoading || diagnosis.loading}
             >
               诊断报告
-              {diagnosis.hasReport && (
+              {diagnosis.hasReport ? (
                 <span className="ml-1.5 inline-flex h-2 w-2 rounded-full bg-green-400" />
-              )}
+              ) : (diagnosis.reportLoading || diagnosis.loading) ? (
+                /* Reserve dot space during load to prevent layout shift */
+                <span className="ml-1.5 inline-flex h-2 w-2 rounded-full invisible" />
+              ) : null}
             </TabButton>
           </div>
 
@@ -180,7 +172,6 @@ export default function SessionPage() {
                 <ChatInput
                   onSend={handleSend}
                   disabled={diagnosis.streaming}
-                  canForceDiagnose={canForceDiagnose}
                 />
               </div>
             ) : (
@@ -198,10 +189,10 @@ export default function SessionPage() {
         <div className="hidden xl:block">
           <ProgressPanel
             score={progressScore}
-            scoreDetail={diagnosis.scoreDetail}
+            completeness={diagnosis.completeness}
             stage={diagnosis.session?.stage ?? ""}
-            canForceDiagnose={canForceDiagnose}
-            onForceDiagnose={handleForceDiagnose}
+            canGenerateReport={!diagnosis.streaming}
+            onGenerateReport={handleGenerateReport}
           />
         </div>
       </div>
@@ -217,11 +208,13 @@ function TabButton({
   active,
   onClick,
   badge,
+  loading = false,
   children,
 }: {
   active: boolean;
   onClick: () => void;
   badge?: string;
+  loading?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -237,11 +230,16 @@ function TabButton({
       `}
     >
       {children}
-      {badge && (
+      {badge ? (
         <span className="ml-1.5 inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-600">
           {badge}
         </span>
-      )}
+      ) : loading ? (
+        /* Reserve badge space during session load to prevent layout shift */
+        <span className="ml-1.5 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium invisible">
+          进行中
+        </span>
+      ) : null}
     </button>
   );
 }

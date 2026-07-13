@@ -7,18 +7,14 @@
 
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import * as api from "@/lib/api";
 
 export default function HomePage() {
   const router = useRouter();
-  const initiated = useRef(false);
 
   useEffect(() => {
-    if (initiated.current) return;
-    initiated.current = true;
-
     let cancelled = false;
 
     async function boot() {

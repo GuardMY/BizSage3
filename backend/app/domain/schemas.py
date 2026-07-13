@@ -7,12 +7,6 @@ from pydantic import BaseModel, Field
 class Scene(BaseModel):
     """Scene recognition output (node_scene_recognize)."""
     industry: str = Field(default="", description="行业: 电商|本地生活|新媒体内容|ToB企业服务|线下零售|教育")
-    business_mode: str = Field(default="", description="业务模式: 直营|分销|线上|线下|付费|免费 等")
-    operate_stage: str = Field(default="", description="运营阶段: 冷启动|增长|稳定|衰退")
-    diagnosis_target: str = Field(default="", description="诊断方向: 整体运营|流量|转化|留存|收益")
-
-    def is_complete(self) -> bool:
-        return bool(self.industry and self.operate_stage)
 
 
 class MetricValue(BaseModel):
@@ -39,10 +33,19 @@ class AnomalyContext(BaseModel):
     question_asked: str = Field(default="", description="Question asked to user about this anomaly")
 
 
+class CompletenessEval(BaseModel):
+    """LLM evaluation of how complete the collected operational info is."""
+    score: int = Field(default=0, ge=0, le=100, description="完备度分数 0-100")
+    summary: str = Field(default="", description="一句话概括已有信息")
+    missing_aspects: List[str] = Field(default_factory=list, description="还缺什么方面")
+    next_question: str = Field(default="", description="建议追问的问题")
+
+
 class ExtractionResult(BaseModel):
-    """Output of the extraction (scene + metrics + anomalies) from conversation."""
+    """Output of the extraction (scene + facts + anomalies) from conversation."""
     scene: Scene = Field(default_factory=Scene)
-    metrics: Dict[str, MetricValue] = Field(default_factory=dict)
+    raw_facts: List[str] = Field(default_factory=list, description="散装运营事实列表")
+    metrics: Dict[str, MetricValue] = Field(default_factory=dict)  # retained for backward compat
     anomalies: Dict[str, AnomalyContext] = Field(default_factory=dict)
 
 

@@ -1,15 +1,22 @@
-"""LangGraph 6-node closed-loop workflow for operations diagnosis.
+"""LangGraph conversational workflow for operations diagnosis.
 
-Strictly follows the reference document's architecture:
-  scene_recognize -> collect_metrics -> check_complete
-      ^                    |              |
-      +-- exception_ask <--+[score<80]  [score>=80] -> diagnosis_analysis
-            |                                              |
-       [interrupt()]                              generate_report -> END
-       (user replies -> back to collect_metrics)
+New graph (after removing hardcoded metric matching):
+
+    START → scene_recognize
+                ↓ (no industry)
+           greeting_guide → await_input → back to scene_recognize
+                ↓ (has industry)
+           chat_extract (facts + LLM completeness)
+                ↓
+           agent_reply (industry-aware conversational guide)
+                ↓
+           await_input (interrupt, wait for user reply) ←── loop ──┐
+                ↓                                                    │
+           user triggers diagnosis ──→ generate_report → END         │
+                                                                     │
+           (normal reply) ──────────────────────────────────────────┘
 
 Uses LangGraph's interrupt() for human-in-the-loop pauses.
-Checkpoints persisted via AsyncSqliteSaver (SQLite).
 """
 
 import asyncio
@@ -22,8 +29,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import interrupt, Command
 
 from app.config import settings
-from app.domain.catalog import calculate_score
-from app.domain.schemas import ResumeInput
+from app.domain.schemas import ResumeInput, CompletenessEval
 from app.services.model_service import DiagnosisModel, create_model
 
 logger = logging.getLogger(__name__)
@@ -34,43 +40,40 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 class AgentState(TypedDict, total=False):
-    """State shared across all workflow nodes.
-
-    Uses TypedDict (total=False) for LangGraph compatibility.
-    All fields have defaults applied in make_initial_state().
-    """
+    """State shared across all workflow nodes."""
     messages: List[Dict[str, str]]
     user_scene: Dict[str, str]
-    collect_metrics: Dict[str, Any]
-    miss_metrics: List[str]
-    complete_score: int
-    need_ask: bool
+    raw_facts: List[str]
+    completeness: Dict[str, Any]        # serialized CompletenessEval
     diagnosis_result: str
     final_report: str
     stage: str
     pending_question: str
-    asked_codes: List[str]
     force_diagnosis: bool
-    limited_diagnosis: bool
     error_message: str
 
 
-def make_initial_state(user_message: str) -> dict:
-    """Create a fresh state dict with defaults for a new session."""
+def make_initial_state(user_message: str, existing_messages: list = None) -> dict:
+    """Create a fresh state dict for a new session.
+
+    Args:
+        user_message: The latest user message to append.
+        existing_messages: List of {"role": ..., "content": ...} dicts already in
+            the DB session (e.g. welcome + conversation starter). They are
+            prepended so the workflow state tracks the full message history.
+    """
+    messages = list(existing_messages) if existing_messages else []
+    messages.append({"role": "user", "content": user_message})
     return {
-        "messages": [{"role": "user", "content": user_message}],
+        "messages": messages,
         "user_scene": {},
-        "collect_metrics": {},
-        "miss_metrics": [],
-        "complete_score": 0,
-        "need_ask": True,
+        "raw_facts": [],
+        "completeness": {},
         "diagnosis_result": "",
         "final_report": "",
         "stage": "init",
         "pending_question": "",
-        "asked_codes": [],
         "force_diagnosis": False,
-        "limited_diagnosis": False,
         "error_message": "",
     }
 
@@ -80,15 +83,14 @@ def make_initial_state(user_message: str) -> dict:
 # =============================================================================
 
 def _make_scene_recognize(model: DiagnosisModel):
-    """Node 1: Scene recognition - identify industry, stage, diagnosis target."""
+    """Node 1: Scene recognition — identify industry, stage."""
 
     async def node_scene_recognize(state: dict) -> dict:
-        logger.info("Node 1: scene_recognize")
+        logger.info("Node: scene_recognize")
         messages = state.get("messages", [])
         if not messages:
             return {"stage": "scene_recognize"}
 
-        # Get the latest user message for scene recognition
         user_msgs = [m for m in messages if m.get("role") == "user"]
         last_user = user_msgs[-1]["content"] if user_msgs else messages[-1].get("content", "")
 
@@ -101,113 +103,103 @@ def _make_scene_recognize(model: DiagnosisModel):
     return node_scene_recognize
 
 
-def _make_collect_metrics(model: DiagnosisModel):
-    """Node 2: Collect metrics - extract structured indicators from conversation."""
+def _make_greeting_guide(model: DiagnosisModel):
+    """Node: Greeting guide — when no industry was identified."""
 
-    async def node_collect_metrics(state: dict) -> dict:
-        logger.info("Node 2: collect_metrics")
+    async def node_greeting_guide(state: dict) -> dict:
+        logger.info("Node: greeting_guide")
         messages = state.get("messages", [])
-        existing = state.get("collect_metrics", {})
-        scene = state.get("user_scene", {})
 
-        collected, missing = await model.collect_metrics(messages, existing, scene)
+        user_msgs = [m for m in messages if m.get("role") == "user"]
+        last_user = user_msgs[-1]["content"] if user_msgs else "你好"
 
-        # Merge with existing (don't lose previously collected metrics)
-        merged = dict(existing)
-        merged.update(collected)
+        guide_text = await model.greeting_guide(last_user)
 
-        return {
-            "collect_metrics": merged,
-            "miss_metrics": missing,
-            "stage": "collect_metrics",
-        }
-
-    return node_collect_metrics
-
-
-def _make_check_complete():
-    """Node 3: Completeness check - pure Python scoring, no LLM."""
-
-    async def node_check_complete(state: dict) -> dict:
-        logger.info("Node 3: check_complete")
-        metrics = state.get("collect_metrics", {})
-        scene = state.get("user_scene", {})
-        force = state.get("force_diagnosis", False)
-
-        industry = scene.get("industry", "")
-        provided_codes = list(metrics.keys())
-
-        result = calculate_score(
-            provided_metric_codes=provided_codes,
-            industry=industry,
-            threshold=settings.complete_threshold,
-        )
-
-        # Determine if we should ask or diagnose
-        if force and result.can_limited_diagnose:
-            need_ask = False
-            limited = True
-        else:
-            need_ask = not result.passed
-            limited = False
-
-        return {
-            "complete_score": result.score,
-            "need_ask": need_ask,
-            "limited_diagnosis": limited,
-            "stage": "check_complete",
-        }
-
-    return node_check_complete
-
-
-def _make_exception_ask(model: DiagnosisModel):
-    """Node 4: Exception ask - generate 1-2 targeted follow-up questions."""
-
-    async def node_exception_ask(state: dict) -> dict:
-        logger.info("Node 4: exception_ask")
-        miss_metrics = state.get("miss_metrics", [])
-        scene = state.get("user_scene", {})
-        asked = state.get("asked_codes", [])
-
-        question = await model.ask_followup(miss_metrics, scene, asked)
-
-        # Track which metrics we're asking about
-        new_asked = list(asked)
-        for m in miss_metrics[:2]:
-            if m not in new_asked:
-                new_asked.append(m)
-
-        # Add the question to messages
-        messages = list(state.get("messages", []))
-        messages.append({"role": "assistant", "content": question})
+        messages = list(messages)
+        messages.append({"role": "assistant", "content": guide_text})
 
         return {
             "messages": messages,
-            "pending_question": question,
-            "asked_codes": new_asked,
-            "stage": "exception_ask",
+            "pending_question": guide_text,
+            "stage": "greeting_guide",
         }
 
-    return node_exception_ask
+    return node_greeting_guide
+
+
+def _make_chat_extract(model: DiagnosisModel):
+    """Node: Extract operational facts + LLM completeness evaluation.
+
+    Replaces the old collect_metrics + check_complete pair.
+    One LLM call does both: extracts facts and scores completeness.
+    """
+
+    async def node_chat_extract(state: dict) -> dict:
+        logger.info("Node: chat_extract")
+        messages = state.get("messages", [])
+        existing_facts = state.get("raw_facts", [])
+        scene = state.get("user_scene", {})
+
+        new_facts, completeness = await model.chat_extract(messages, existing_facts, scene)
+
+        # Merge new facts with existing
+        all_facts = list(existing_facts)
+        for f in new_facts:
+            if f not in all_facts:
+                all_facts.append(f)
+
+        return {
+            "raw_facts": all_facts,
+            "completeness": completeness.model_dump(),
+            "stage": "chat_extract",
+        }
+
+    return node_chat_extract
+
+
+def _make_agent_reply(model: DiagnosisModel):
+    """Node: Generate industry-aware conversational reply.
+
+    Uses the completeness evaluation to decide what to ask next.
+    If score >= 80, includes a hint that the user can trigger diagnosis.
+    """
+
+    async def node_agent_reply(state: dict) -> dict:
+        logger.info("Node: agent_reply")
+        raw_facts = state.get("raw_facts", [])
+        comp_data = state.get("completeness", {})
+        scene = state.get("user_scene", {})
+
+        completeness = CompletenessEval(**comp_data) if comp_data else CompletenessEval()
+
+        reply = await model.agent_reply(raw_facts, completeness, scene)
+
+        messages = list(state.get("messages", []))
+        messages.append({"role": "assistant", "content": reply})
+
+        return {
+            "messages": messages,
+            "pending_question": reply,
+            "stage": "agent_reply",
+        }
+
+    return node_agent_reply
 
 
 def _make_await_input():
     """Interrupt node: pause workflow and wait for user reply.
 
-    Uses LangGraph's interrupt() - on first invocation it suspends the graph
-    and returns the question to the caller. On resume (via Command(resume=...)),
-    it receives the user's reply and adds it to messages.
+    On first invocation: interrupt() suspends the graph, returns the question.
+    On resume (via Command(resume=...)): receives user reply, adds to messages.
     """
 
     async def node_await_input(state: dict) -> dict:
         logger.info("Node: await_input (interrupt)")
-        question = state.get("pending_question", "Please provide more information")
+        question = state.get("pending_question", "请提供更多信息")
 
         # interrupt() suspends here; returns user reply on resume
         user_reply: str = interrupt({"question": question})
 
-        # Add user reply to messages
         messages = list(state.get("messages", []))
         messages.append({"role": "user", "content": user_reply})
 
@@ -219,45 +211,30 @@ def _make_await_input():
     return node_await_input
 
 
-def _make_diagnosis_analysis(model: DiagnosisModel):
-    """Node 5: 6-dimension diagnosis analysis."""
-
-    async def node_diagnosis_analysis(state: dict) -> dict:
-        logger.info("Node 5: diagnosis_analysis")
-        metrics = state.get("collect_metrics", {})
-        scene = state.get("user_scene", {})
-
-        result = await model.diagnose(metrics, scene)
-
-        return {
-            "diagnosis_result": result,
-            "stage": "diagnosis_analysis",
-        }
-
-    return node_diagnosis_analysis
-
-
 def _make_generate_report(model: DiagnosisModel):
-    """Node 6: Generate structured diagnosis report (LLM-based per design doc)."""
+    """Node: Generate the final diagnosis report.
+
+    Feeds all collected raw facts + completeness info to the LLM
+    and produces a structured markdown report.
+    """
 
     async def node_generate_report(state: dict) -> dict:
-        logger.info("Node 6: generate_report")
-        diagnosis = state.get("diagnosis_result", "")
-        metrics = state.get("collect_metrics", {})
-        score = state.get("complete_score", 0)
-        miss = state.get("miss_metrics", [])
-        limited = state.get("limited_diagnosis", False)
+        logger.info("Node: generate_report")
+        raw_facts = state.get("raw_facts", [])
+        comp_data = state.get("completeness", {})
+        scene = state.get("user_scene", {})
+        force = state.get("force_diagnosis", False)
 
-        report = await model.generate_report(diagnosis, metrics, score, miss)
+        completeness = CompletenessEval(**comp_data) if comp_data else CompletenessEval()
 
-        # Append report to messages
+        report = await model.generate_report(raw_facts, completeness, scene)
+
         messages = list(state.get("messages", []))
         messages.append({"role": "assistant", "content": report})
 
         return {
             "final_report": report,
             "messages": messages,
-            "limited_diagnosis": limited,
             "stage": "generate_report",
         }
 
@@ -268,17 +245,26 @@ def _make_generate_report(model: DiagnosisModel):
 # Routing
 # =============================================================================
 
-def route_after_check(state: dict) -> str:
-    """Branch: ask follow-up OR proceed to diagnosis."""
-    need_ask = state.get("need_ask", False)
-    if need_ask:
-        return "exception_ask"
-    return "diagnosis_analysis"
+def route_after_scene(state: dict) -> str:
+    """After scene recognition: if no industry identified, guide user."""
+    scene = state.get("user_scene", {})
+    if not scene or not scene.get("industry", ""):
+        return "greeting_guide"
+    # First message with scene? Check if we should go to chat_extract
+    return "chat_extract"
 
 
 def route_after_await(state: dict) -> str:
-    """After user input received, loop back to collect_metrics."""
-    return "collect_metrics"
+    """After user input: chat_extract (normal) or generate_report (forced)."""
+    force = state.get("force_diagnosis", False)
+    if force:
+        return "generate_report"
+    return "chat_extract"
+
+
+def route_after_greeting(state: dict) -> str:
+    """After greeting guide: go to await_input."""
+    return "await_input"
 
 
 # =============================================================================
@@ -286,55 +272,59 @@ def route_after_await(state: dict) -> str:
 # =============================================================================
 
 def build_graph(model: Optional[DiagnosisModel] = None) -> StateGraph:
-    """Build the 6-node LangGraph StateGraph for operations diagnosis.
+    """Build the conversational diagnosis LangGraph StateGraph.
 
-    Returns a compiled StateGraph with:
-      - 6 processing nodes (scene_recognize through generate_report)
-      - 1 interrupt node (await_input)
-      - Conditional routing based on completeness score
-      - AsyncSqliteSaver checkpointing
+    Nodes: scene_recognize, greeting_guide, chat_extract, agent_reply,
+           await_input, generate_report
+
+    Flow:
+      START → scene_recognize
+                ↓ (no industry) → greeting_guide → await_input → scene_recognize
+                ↓ (has industry) → chat_extract → agent_reply → await_input → chat_extract
+      Force diagnose: skip straight to generate_report
     """
     if model is None:
         model = create_model()
 
     graph = StateGraph(AgentState)
 
-    # Register all nodes
+    # Register nodes
     graph.add_node("scene_recognize", _make_scene_recognize(model))
-    graph.add_node("collect_metrics", _make_collect_metrics(model))
-    graph.add_node("check_complete", _make_check_complete())
-    graph.add_node("exception_ask", _make_exception_ask(model))
+    graph.add_node("greeting_guide", _make_greeting_guide(model))
+    graph.add_node("chat_extract", _make_chat_extract(model))
+    graph.add_node("agent_reply", _make_agent_reply(model))
     graph.add_node("await_input", _make_await_input())
-    graph.add_node("diagnosis_analysis", _make_diagnosis_analysis(model))
     graph.add_node("generate_report", _make_generate_report(model))
 
-    # Build edges matching the reference document's flow
+    # Build edges
     graph.add_edge(START, "scene_recognize")
-    graph.add_edge("scene_recognize", "collect_metrics")
-    graph.add_edge("collect_metrics", "check_complete")
 
-    # Conditional branch: score < 80 -> ask, score >= 80 -> diagnose
+    # scene_recognize → greeting_guide (no industry) or chat_extract (has industry)
     graph.add_conditional_edges(
-        "check_complete",
-        route_after_check,
+        "scene_recognize",
+        route_after_scene,
         {
-            "exception_ask": "exception_ask",
-            "diagnosis_analysis": "diagnosis_analysis",
+            "greeting_guide": "greeting_guide",
+            "chat_extract": "chat_extract",
         },
     )
 
-    # exception_ask -> await_input (interrupt) -> back to collect_metrics
-    graph.add_edge("exception_ask", "await_input")
+    # greeting_guide → await_input → back to scene_recognize (to re-identify)
+    graph.add_edge("greeting_guide", "await_input")
     graph.add_conditional_edges(
         "await_input",
         route_after_await,
         {
-            "collect_metrics": "collect_metrics",
+            "chat_extract": "chat_extract",
+            "generate_report": "generate_report",
         },
     )
 
-    # diagnosis -> report -> END
-    graph.add_edge("diagnosis_analysis", "generate_report")
+    # chat_extract → agent_reply → await_input → loop back to chat_extract
+    graph.add_edge("chat_extract", "agent_reply")
+    graph.add_edge("agent_reply", "await_input")
+
+    # generate_report → END
     graph.add_edge("generate_report", END)
 
     return graph
@@ -345,14 +335,7 @@ def build_graph(model: Optional[DiagnosisModel] = None) -> StateGraph:
 # =============================================================================
 
 class WorkflowManager:
-    """Manages the LangGraph workflow lifecycle.
-
-    Responsibilities:
-      - Initialize and hold the compiled graph with checkpointer
-      - start(): Run from START to first interrupt() (or END)
-      - resume(): Resume from an interrupt() checkpoint
-      - delete_thread(): Clean up a session's checkpoint state
-    """
+    """Manages the LangGraph workflow lifecycle."""
 
     def __init__(self):
         self._graph: Optional[CompiledStateGraph] = None
@@ -362,18 +345,16 @@ class WorkflowManager:
         self._locks: Dict[str, asyncio.Lock] = {}
 
     async def startup(self):
-        """Initialize the graph, checkpointer, and model. Call once at app startup."""
+        """Initialize the graph, checkpointer, and model."""
         self._model = create_model()
         graph = build_graph(self._model)
 
-        # Set up SQLite checkpointer for persistence
         db_url = settings.checkpoint_db_url
         if db_url.startswith("sqlite+aiosqlite://"):
             db_path = db_url[len("sqlite+aiosqlite://"):]
         else:
             db_path = db_url
 
-        # from_conn_string is an async context manager - enter it and hold
         self._checkpointer_ctx = AsyncSqliteSaver.from_conn_string(db_path)
         self._checkpointer = await self._checkpointer_ctx.__aenter__()
         await self._checkpointer.setup()
@@ -389,40 +370,39 @@ class WorkflowManager:
             self._checkpointer = None
         logger.info("WorkflowManager shut down")
 
-    async def start(self, session_id: str, user_message: str) -> dict:
+    async def start(self, session_id: str, user_message: str, existing_messages: list = None) -> dict:
         """Start a new diagnosis workflow for a session.
 
         Args:
-            session_id: Unique session identifier (used as thread_id).
-            user_message: The first user message.
-
-        Returns:
-            The final state dict after running until interrupt or completion.
+            session_id: The diagnosis session ID (used as LangGraph thread_id).
+            user_message: The latest user message to process.
+            existing_messages: Previous DB messages (dicts with role/content) to
+                include in the initial state so the workflow sees full history.
         """
         if not self._graph:
             raise RuntimeError("WorkflowManager not started. Call startup() first.")
 
-        init_state = make_initial_state(user_message)
+        init_state = make_initial_state(user_message, existing_messages)
         config = {"configurable": {"thread_id": session_id}}
 
         result = await self._graph.ainvoke(init_state, config)
         return result
 
     async def resume(self, session_id: str, payload: ResumeInput) -> dict:
-        """Resume a paused workflow after user input.
-
-        Args:
-            session_id: Session identifier (thread_id).
-            payload: The user's reply (content + action).
-
-        Returns:
-            The final state dict after running until next interrupt or END.
-        """
+        """Resume a paused workflow after user input."""
         if not self._graph:
             raise RuntimeError("WorkflowManager not started. Call startup() first.")
 
         config = {"configurable": {"thread_id": session_id}}
 
+        # Set force_diagnosis before resuming if requested
+        if payload.action == "diagnose_with_current_data":
+            await self._graph.aupdate_state(
+                config,
+                {"force_diagnosis": True},
+            )
+
+        # Resume the workflow; routing checks force_diagnosis flag
         result = await self._graph.ainvoke(
             Command(resume=payload.content),
             config,

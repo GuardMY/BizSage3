@@ -2,8 +2,7 @@
  * BizSage3 — useDiagnosis hook.
  *
  * Manages the active session's details, messages, SSE streaming,
- * and report state. Uses multiple useState hooks for a flat API
- * surface consumable by existing components.
+ * and report state.
  */
 
 "use client";
@@ -12,55 +11,39 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   SessionDetail,
   Message,
-  ScoreDetail,
+  CompletenessDetail,
   ReportResponse,
   MessageRequest,
 } from "@/types";
 import * as api from "@/lib/api";
 
 export interface UseDiagnosisReturn {
-  /** The full session detail (refreshed after SSE updates). */
   session: SessionDetail | null;
-  /** Flat message list sorted by sequence. */
   messages: Message[];
-  /** Current completeness score breakdown. */
-  scoreDetail: ScoreDetail | null;
-  /** Whether a streaming request is in-flight. */
+  completeness: CompletenessDetail | null;
   streaming: boolean;
-  /** The partial text being accumulated from assistant.delta events. */
   streamText: string;
-  /** Human-readable stage label (Chinese). */
   stageLabel: string;
-  /** Loading state when fetching session. */
   loading: boolean;
-  /** Error message, if any. */
   error: string | null;
-  /** Whether a report exists for the current session. */
   hasReport: boolean;
-  /** The fetched report (null until loaded). */
   report: ReportResponse | null;
-  /** Whether the report is being fetched. */
   reportLoading: boolean;
 
-  /** Load (or reload) the session by id. */
   loadSession: (id: string) => Promise<void>;
-  /** Send a user message. Returns immediately; updates arrive via SSE. */
   sendMessage: (
     content: string,
     action?: "reply" | "diagnose_with_current_data",
   ) => void;
-  /** Fetch the diagnosis report. */
   loadReport: () => Promise<void>;
-  /** Clear any error. */
   clearError: () => void;
-  /** Reset state (on navigation away). */
   reset: () => void;
 }
 
 export function useDiagnosis(): UseDiagnosisReturn {
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [scoreDetail, setScoreDetail] = useState<ScoreDetail | null>(null);
+  const [completeness, setCompleteness] = useState<CompletenessDetail | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [streamText, setStreamText] = useState("");
   const [stageLabel, setStageLabel] = useState("");
@@ -74,7 +57,6 @@ export function useDiagnosis(): UseDiagnosisReturn {
   const mounted = useRef(true);
   const currentSessionId = useRef<string | null>(null);
 
-  // Keep messagesRef in sync
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
@@ -93,7 +75,7 @@ export function useDiagnosis(): UseDiagnosisReturn {
   const reset = useCallback(() => {
     setSession(null);
     setMessages([]);
-    setScoreDetail(null);
+    setCompleteness(null);
     setStreaming(false);
     setStreamText("");
     setStageLabel("");
@@ -115,11 +97,13 @@ export function useDiagnosis(): UseDiagnosisReturn {
     try {
       setLoading(true);
       setError(null);
+      setReport(null);
+      setReportLoading(false);
       const detail = await api.getSession(id);
       if (!mounted.current || currentSessionId.current !== id) return;
       setSession(detail);
       setMessages(detail.messages ?? []);
-      setScoreDetail(detail.score_detail ?? null);
+      setCompleteness(detail.completeness ?? null);
       setHasReport(detail.has_report ?? false);
       setStageLabel(stageLabelForStage(detail.stage));
     } catch (err) {
@@ -142,7 +126,6 @@ export function useDiagnosis(): UseDiagnosisReturn {
       const sid = currentSessionId.current;
       if (!sid) return;
 
-      // Optimistically add user message
       const userMsg: Message = {
         id: `temp-${Date.now()}`,
         role: "user",
@@ -203,9 +186,13 @@ export function useDiagnosis(): UseDiagnosisReturn {
               case "state": {
                 const data = JSON.parse(sseEvent.data) as SessionDetail;
                 setSession(data);
-                setMessages(data.messages ?? []);
-                messagesRef.current = data.messages ?? [];
-                setScoreDetail(data.score_detail ?? null);
+                const serverCount = (data.messages ?? []).length;
+                const localCount = messagesRef.current.length;
+                if (serverCount >= localCount) {
+                  setMessages(data.messages ?? []);
+                  messagesRef.current = data.messages ?? [];
+                }
+                setCompleteness(data.completeness ?? null);
                 setHasReport(data.has_report ?? false);
                 setStageLabel(stageLabelForStage(data.stage));
                 setStreamText("");
@@ -229,7 +216,7 @@ export function useDiagnosis(): UseDiagnosisReturn {
               }
             }
           } catch {
-            // Ignore parse errors for malformed SSE data
+            // Ignore parse errors
           }
         })
         .catch((err) => {
@@ -276,7 +263,7 @@ export function useDiagnosis(): UseDiagnosisReturn {
   return {
     session,
     messages,
-    scoreDetail,
+    completeness,
     streaming,
     streamText,
     stageLabel,
@@ -301,11 +288,10 @@ function stageLabelForStage(stage: string): string {
   const labels: Record<string, string> = {
     init: "初始化",
     scene_recognize: "识别行业场景...",
-    collect_metrics: "提取运营指标...",
-    check_complete: "评估信息完备度...",
-    exception_ask: "生成补充问题...",
+    greeting_guide: "自我介绍...",
+    chat_extract: "分析对话...",
+    agent_reply: "思考中...",
     await_input: "等待您的回复",
-    diagnosis_analysis: "六维度诊断分析中...",
     generate_report: "生成诊断报告...",
   };
   return labels[stage] ?? stage;

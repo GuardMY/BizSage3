@@ -14,17 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.db import get_session as get_db_session
-from app.config import settings
 from app.domain.schemas import ResumeInput
-from app.domain.catalog import CORE_METRICS, INDUSTRY_SECONDARY_METRICS, INDUSTRIES
 from app.api_schemas import (
     SessionSummary,
     SessionDetail,
     MessageRequest,
     ReportResponse,
-    MetaResponse,
-    IndustryDef,
-    MetricDef,
 )
 from app.serializers import session_summary, session_detail, report_response
 from app.repository import SessionRepository
@@ -61,11 +56,29 @@ async def list_sessions(db: AsyncSession = Depends(get_db_session)):
     return [session_summary(s) for s in sessions]
 
 
+WELCOME_MESSAGE = (
+    "你好！我是 BizSage 运营诊断助手 📊\n\n"
+    "我可以帮你：\n"
+    "- 识别你的行业和业务场景\n"
+    "- 基于运营数据做多维度诊断分析\n"
+    "- 生成诊断报告和优化方案"
+)
+
+CONVERSATION_STARTER = "来聊聊你的业务吧——你目前在做什么行业？"
+
+
+
 @router.post("/sessions", response_model=SessionDetail, status_code=201)
 async def create_session(db: AsyncSession = Depends(get_db_session)):
-    """Create a new diagnosis session."""
+    """Create a new diagnosis session with a welcome message."""
     repo = SessionRepository(db)
     session = await repo.create_session()
+
+    # Add welcome assistant message so the user sees a greeting immediately
+    await repo.add_assistant_message(session.id, WELCOME_MESSAGE)
+    # Follow up with a conversation starter to kick off the diagnosis dialogue
+    await repo.add_assistant_message(session.id, CONVERSATION_STARTER)
+
     await db.commit()
     # Re-fetch with eager loaded relationships
     session = await repo.get_session(session.id)
@@ -100,11 +113,10 @@ async def delete_session(session_id: str, db: AsyncSession = Depends(get_db_sess
 STAGE_LABELS = {
     "init": "初始化",
     "scene_recognize": "识别行业场景...",
-    "collect_metrics": "提取运营指标...",
-    "check_complete": "评估信息完备度...",
-    "exception_ask": "生成补充问题...",
+    "greeting_guide": "自我介绍...",
+    "chat_extract": "分析对话...",
+    "agent_reply": "思考中...",
     "await_input": "等待您的回复",
-    "diagnosis_analysis": "六维度诊断分析中...",
     "generate_report": "生成诊断报告...",
 }
 
@@ -160,7 +172,6 @@ async def _process_message(repo: SessionRepository, session, body: MessageReques
     # 1. Idempotency check
     existing = await repo.find_client_message(session.id, body.client_message_id)
     if existing:
-        # Return current state without re-processing
         yield {"event": "state", "data": json.dumps(
             session_detail(session).model_dump(mode="json"), ensure_ascii=False
         )}
@@ -173,18 +184,25 @@ async def _process_message(repo: SessionRepository, session, body: MessageReques
             session.id, body.content, body.client_message_id
         )
 
-    # 3. Determine: start or resume
-    # If session is new (stage=init, no scene yet), start
-    # Otherwise resume
+    # 3. Determine: start new workflow or resume
     stage = session.stage or "init"
-    is_new = stage == "init" and not session.scene or session.scene == "{}"
+    has_scene = bool(session.scene) and session.scene != "{}"
+
+    # New workflow if: stage is init/collecting and no scene identified yet
+    is_new = stage in ("init", "collecting") and not has_scene
 
     try:
         if is_new:
             yield {"event": "stage", "data": json.dumps(
-                {"stage": "scene_recognize", "label": STAGE_LABELS["scene_recognize"]}
+                {"stage": "scene_recognize", "label": STAGE_LABELS.get("scene_recognize", "识别行业场景...")},
+                ensure_ascii=False
             )}
-            result = await workflow_manager.start(session.id, body.content or "")
+            # Pass existing DB messages so workflow state aligns with DB count
+            existing = [
+                {"role": m.role, "content": m.content}
+                for m in (session.messages or [])
+            ]
+            result = await workflow_manager.start(session.id, body.content or "", existing)
         else:
             action = body.action or "reply"
             payload = ResumeInput(
@@ -234,7 +252,6 @@ async def _emit_result(repo: SessionRepository, session, result: dict):
     final_report = result.get("final_report", "")
     if final_report:
         # Save report to DB
-        from app.domain.schemas import DiagnosisResult
         await repo.save_report(
             session.id,
             markdown=final_report,
@@ -252,8 +269,13 @@ async def _emit_result(repo: SessionRepository, session, result: dict):
         )}
 
     # Emit full state snapshot
-    # Re-fetch session to get latest DB state
-    detail = session_detail(session)
+    # Re-fetch session to get latest DB state (messages were added during
+    # this request and the in-memory ORM relationship is stale).
+    fresh_session = await repo.get_session(session.id)
+    if fresh_session:
+        detail = session_detail(fresh_session)
+    else:
+        detail = session_detail(session)
     yield {"event": "state", "data": json.dumps(
         detail.model_dump(mode="json"), ensure_ascii=False
     )}
@@ -299,30 +321,3 @@ async def download_report(session_id: str, db: AsyncSession = Depends(get_db_ses
     )
 
 
-# =============================================================================
-# Meta
-# =============================================================================
-
-@router.get("/meta/industries", response_model=MetaResponse)
-async def get_industries():
-    """Return available industries, core metrics, and LLM mode."""
-    industry_defs = [
-        IndustryDef(code=k, label=k, description=v)
-        for k, v in INDUSTRIES.items()
-    ]
-    metric_defs = [
-        MetricDef(
-            code=m.code,
-            label=m.label,
-            category=m.category,
-            description=m.description,
-            unit=m.unit,
-            is_core=m.is_core,
-        )
-        for m in CORE_METRICS
-    ]
-    return MetaResponse(
-        industries=industry_defs,
-        core_metrics=metric_defs,
-        llm_mode=settings.llm_mode,
-    )

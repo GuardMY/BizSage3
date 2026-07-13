@@ -14,7 +14,6 @@ import type {
   SessionDetail,
   MessageRequest,
   ReportResponse,
-  MetaResponse,
 } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -137,12 +136,3 @@ export async function streamMessage(
   return consumeSSE(res, onEvent);
 }
 
-// ---------------------------------------------------------------------------
-// Meta
-// ---------------------------------------------------------------------------
-
-/** Return available industries, core metrics, and LLM mode. */
-export async function getMeta(): Promise<MetaResponse> {
-  const res = await fetch(`${apiBase()}/meta/industries`);
-  return handleResponse<MetaResponse>(res);
-}

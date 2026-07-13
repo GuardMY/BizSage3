@@ -16,10 +16,9 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 interface ChatInputProps {
   onSend: (content: string, action?: "reply" | "diagnose_with_current_data") => void;
   disabled: boolean;
-  canForceDiagnose: boolean;
 }
 
-export default function ChatInput({ onSend, disabled, canForceDiagnose }: ChatInputProps) {
+export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   const [text, setText] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -44,11 +43,6 @@ export default function ChatInput({ onSend, disabled, canForceDiagnose }: ChatIn
     onSend(trimmed, "reply");
     setText("");
   }, [text, disabled, onSend]);
-
-  const handleForceDiagnose = useCallback(() => {
-    if (disabled) return;
-    onSend("", "diagnose_with_current_data");
-  }, [disabled, onSend]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -106,27 +100,8 @@ export default function ChatInput({ onSend, disabled, canForceDiagnose }: ChatIn
           </button>
         </div>
 
-        {/* Bottom row: Force Diagnose */}
-        <div className="mt-2 flex items-center justify-between">
-          <div>
-            {canForceDiagnose && (
-              <button
-                onClick={handleForceDiagnose}
-                disabled={disabled}
-                className="
-                  inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5
-                  text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200
-                  transition-colors hover:bg-amber-100
-                  disabled:cursor-not-allowed disabled:opacity-40
-                "
-              >
-                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
-                </svg>
-                基于当前数据强制诊断
-              </button>
-            )}
-          </div>
+        {/* Bottom row */}
+        <div className="mt-2 flex items-center justify-end">
           <span className="text-xs text-gray-400">Enter 发送 · Shift+Enter 换行</span>
         </div>
       </div>

@@ -85,21 +85,28 @@ class SessionRepository:
         """
         session.stage = workflow_state.get("stage", session.stage)
         session.scene = json.dumps(workflow_state.get("user_scene", {}), ensure_ascii=False)
-        session.metrics = json.dumps(workflow_state.get("collect_metrics", {}), ensure_ascii=False)
-        session.score = workflow_state.get("complete_score", 0)
+
+        # Store raw_facts in the metrics column (repurposed)
+        raw_facts = workflow_state.get("raw_facts", [])
+        session.metrics = json.dumps(raw_facts, ensure_ascii=False)
+
+        # Store completeness from LLM evaluation
+        completeness = workflow_state.get("completeness", {})
+        session.score = completeness.get("score", 0)
         session.score_detail = json.dumps({
-            "core_complete": len(workflow_state.get("miss_metrics", [])) == 0,
-            "missing_core": [],
-            "missing_secondary": workflow_state.get("miss_metrics", []),
+            "score": completeness.get("score", 0),
+            "summary": completeness.get("summary", ""),
+            "missing_aspects": completeness.get("missing_aspects", []),
         }, ensure_ascii=False)
         session.updated_at = _utcnow()
 
         # Determine status from stage
         final_report = workflow_state.get("final_report", "")
+        stage = workflow_state.get("stage", "")
         if final_report:
             session.status = "completed"
             session.waiting_for_input = False
-        elif workflow_state.get("stage") in ("exception_ask", "await_input"):
+        elif stage in ("agent_reply", "await_input", "chat_extract"):
             session.status = "collecting"
             session.waiting_for_input = True
         else:
