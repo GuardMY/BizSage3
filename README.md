@@ -91,7 +91,43 @@ START → scene_recognize（场景识别）
 - **幂等性保证** — 通过 `client_message_id` 唯一约束防止消息重复处理
 - **状态持久化** — LangGraph Checkpoint 将图状态写入 SQLite，支持断线恢复和重放
 
-## 快速开始
+## Docker Compose 部署
+
+首次部署先创建后端环境文件，并至少填写 `OPENAI_API_KEY` 和 `ADMIN_TOKEN`：
+
+```bash
+cp backend/.env.example backend/.env
+```
+
+构建并启动服务：
+
+```bash
+docker compose up -d --build
+docker compose ps
+```
+
+启动完成后访问 <http://localhost:3000>。FastAPI 不直接暴露到宿主机，前端会在
+Compose 内部网络中将 `/api/*` 请求转发到后端。后端启动时会自动执行数据库迁移。
+
+默认宿主机端口为 `3000`。如需修改，可在项目根目录创建 `.env`：
+
+```dotenv
+APP_PORT=8080
+```
+
+常用运维命令：
+
+```bash
+docker compose logs -f
+docker compose up -d --build   # 拉取代码后重新构建并重建服务
+docker compose down            # 停止服务，保留数据
+```
+
+业务数据库和 LangGraph 检查点保存在 `bizsage-data` 命名卷中。仅在确认不再需要数据时
+使用 `docker compose down -v`。HTTPS 反向代理部署时，还需在 `backend/.env` 中设置
+`AUTH_COOKIE_SECURE=true`。
+
+## 本地开发
 
 ### 环境要求
 
