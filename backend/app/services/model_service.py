@@ -138,7 +138,17 @@ class OpenAICompatibleModel(DiagnosisModel):
                 SystemMessage(content=system),
                 HumanMessage(content=user_message),
             ]
-            return await structured_llm.ainvoke(messages)
+            logger.info(
+                "[scene_recognize] LLM Structured request\nsystem: %s\nuser: %s",
+                system,
+                user_message,
+            )
+            result: Scene = await structured_llm.ainvoke(messages)
+            logger.info(
+                "[scene_recognize] LLM Structured response:\n%s",
+                result.model_dump(),
+            )
+            return result
         except Exception:
             logger.exception("[scene_recognize] 场景识别失败")
             return Scene()
@@ -200,7 +210,16 @@ class OpenAICompatibleModel(DiagnosisModel):
                 SystemMessage(content=system),
                 HumanMessage(content=f"对话历史：{history_text}"),
             ]
+            logger.info(
+                "[chat_extract] LLM Structured request\nsystem: %s\nuser: %s",
+                system,
+                history_text,
+            )
             result: ChatExtractOutput = await structured_llm.ainvoke(messages_payload)
+            logger.info(
+                "[chat_extract] LLM Structured response:\n%s",
+                result.model_dump(),
+            )
             return (result.new_facts, result.completeness)
         except Exception as e:
             logger.exception("[chat_extract] 对话提取失败: %s", e)
