@@ -9,13 +9,15 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.db import engine
 from app.models import Base
 from app.api import router as api_router
+from app.auth import get_current_principal
+from app.auth_api import router as auth_router
 from app.services.workflow import workflow_manager
 from app.services.report_service import report_task_manager
 
@@ -56,8 +58,12 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Include API routes
-    app.include_router(api_router)
+    # Authentication endpoints stay public; all business endpoints require a session.
+    app.include_router(auth_router)
+    app.include_router(
+        api_router,
+        dependencies=[Depends(get_current_principal)],
+    )
 
     # Health checks (at root level for simplicity)
     @app.get("/health/live")

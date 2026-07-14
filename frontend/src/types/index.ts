@@ -77,6 +77,30 @@ export interface ReportGenerationResponse {
   status: "generating";
 }
 
+// Authentication and temporary access tokens
+
+export interface AuthSession {
+  role: "admin" | "user";
+  expires_at: string;
+}
+
+export type TemporaryTokenStatus = "active" | "expired" | "revoked";
+
+export interface TemporaryAccessToken {
+  id: string;
+  name: string;
+  token_prefix: string;
+  created_at: string;
+  expires_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  status: TemporaryTokenStatus;
+}
+
+export interface CreatedTemporaryAccessToken extends TemporaryAccessToken {
+  token: string;
+}
+
 // ─── Meta ──────────────────────────────────────────────────────────────
 
 export interface MetricDef {

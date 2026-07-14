@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: str = "http://localhost:3000"
 
+    # Access control. ADMIN_TOKEN must be set before the protected API can be used.
+    admin_token: str = ""
+    auth_session_hours: int = 12
+    auth_cookie_name: str = "bizsage_session"
+    auth_cookie_secure: bool = False
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000

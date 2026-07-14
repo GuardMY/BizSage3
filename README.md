@@ -156,6 +156,18 @@ npm run dev
 | `LLM_MODEL` | 模型名称 | `gpt-3.5-turbo` |
 | `COMPLETE_THRESHOLD` | 信息完备度阈值 | `80` |
 | `CORS_ORIGINS` | 允许的前端域名 | `http://localhost:3000` |
+| `ADMIN_TOKEN` | 服务端管理员令牌（必填） | - |
+| `AUTH_SESSION_HOURS` | 登录会话有效时长 | `12` |
+| `AUTH_COOKIE_SECURE` | 是否仅通过 HTTPS 发送登录 Cookie | `false` |
+
+## 访问控制
+
+启动 API 前，在 `backend/.env` 中设置 `ADMIN_TOKEN`。该值仅保留在服务端，用于
+登录管理员界面。管理员可签发带有效期、可随时撤销的临时令牌；数据库只保存令牌的
+SHA-256 摘要，完整令牌仅在创建成功时返回一次。
+
+HTTPS 部署还需设置 `AUTH_COOKIE_SECURE=true`。更新后运行 `alembic upgrade head`
+创建临时令牌表。
 
 ## License
 

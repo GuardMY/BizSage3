@@ -11,6 +11,7 @@
  * ============================================================================= */
 
 import React, { useState } from "react";
+import { Menu } from "lucide-react";
 
 interface AppShellProps {
   sidebar: React.ReactNode;
@@ -51,9 +52,7 @@ export default function AppShell({ sidebar, children }: AppShellProps) {
             className="rounded-md p-1.5 text-gray-600 hover:bg-gray-100 transition-colors"
             aria-label="打开侧边栏"
           >
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
-            </svg>
+            <Menu className="h-5 w-5" />
           </button>
           <span className="text-sm font-semibold text-gray-700">BizSage3</span>
         </div>

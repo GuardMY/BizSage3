@@ -13,6 +13,7 @@
  * ============================================================================= */
 
 import React from "react";
+import { AlertTriangle, Inbox, LogOut, Plus, Settings, X } from "lucide-react";
 import type { SessionSummary } from "@/types";
 
 interface SessionSidebarProps {
@@ -22,6 +23,9 @@ interface SessionSidebarProps {
   onSelect: (id: string) => void;
   onCreate: () => void;
   onDelete: (id: string) => void;
+  isAdmin: boolean;
+  onAdmin: () => void;
+  onLogout: () => void;
 }
 
 export default function SessionSidebar({
@@ -31,6 +35,9 @@ export default function SessionSidebar({
   onSelect,
   onCreate,
   onDelete,
+  isAdmin,
+  onAdmin,
+  onLogout,
 }: SessionSidebarProps) {
   return (
     <div className="flex h-full flex-col bg-gray-900 text-gray-100">
@@ -49,9 +56,7 @@ export default function SessionSidebar({
           disabled={loading}
           className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-          </svg>
+          <Plus className="h-4 w-4" />
           新建诊断
         </button>
       </div>
@@ -75,6 +80,25 @@ export default function SessionSidebar({
             ))}
           </ul>
         )}
+      </div>
+
+      <div className="border-t border-gray-800 p-2">
+        {isAdmin && (
+          <button
+            onClick={onAdmin}
+            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white"
+          >
+            <Settings className="h-4 w-4" />
+            <span>访问管理</span>
+          </button>
+        )}
+        <button
+          onClick={onLogout}
+          className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 hover:bg-gray-800 hover:text-white"
+        >
+          <LogOut className="h-4 w-4" />
+          <span>退出登录</span>
+        </button>
       </div>
     </div>
   );
@@ -122,9 +146,7 @@ function SessionItem({ session, isActive, onSelect, onDelete }: SessionItemProps
             className="shrink-0 rounded p-0.5 text-gray-500 opacity-0 transition-all hover:text-red-400 group-hover:opacity-100"
             aria-label="删除会话"
           >
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
+            <X className="h-3.5 w-3.5" />
           </button>
         </div>
 
@@ -151,9 +173,7 @@ function SessionItem({ session, isActive, onSelect, onDelete }: SessionItemProps
         {/* Limited diagnosis warning */}
         {session.limited_diagnosis && (
           <div className="mt-1 flex items-center gap-1 text-xs text-amber-400">
-            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
-            </svg>
+            <AlertTriangle className="h-3 w-3" />
             有限诊断
           </div>
         )}
@@ -189,9 +209,7 @@ function SessionListSkeleton() {
 function EmptyState() {
   return (
     <div className="flex flex-col items-center justify-center py-12 text-gray-500">
-      <svg className="mb-2 h-8 w-8" fill="none" viewBox="0 0 24 24" strokeWidth={1} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5m6 4.125l2.25 2.25m0 0l2.25 2.25M12 11.625l2.25-2.25M12 11.625l-2.25 2.25M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
-      </svg>
+      <Inbox className="mb-2 h-8 w-8" />
       <p className="text-xs">暂无诊断会话</p>
       <p className="mt-1 text-xs text-gray-600">点击上方按钮开始新的诊断</p>
     </div>

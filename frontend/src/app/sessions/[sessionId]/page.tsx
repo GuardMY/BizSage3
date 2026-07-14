@@ -26,6 +26,7 @@ import ProgressPanel from "@/components/ProgressPanel";
 import ErrorBanner from "@/components/ErrorBanner";
 import { useSessions } from "@/hooks/useSessions";
 import { useDiagnosis } from "@/hooks/useDiagnosis";
+import { useAuth } from "@/components/AuthProvider";
 
 type Tab = "chat" | "report";
 
@@ -37,6 +38,7 @@ export default function SessionPage() {
   // ─── Hooks ──────────────────────────────────────────────────────────────
   const sessionsHook = useSessions();
   const diagnosis = useDiagnosis();
+  const auth = useAuth();
 
   const [activeTab, setActiveTab] = useState<Tab>("chat");
 
@@ -117,6 +119,9 @@ export default function SessionPage() {
           onSelect={handleSelectSession}
           onCreate={handleCreateSession}
           onDelete={handleDeleteSession}
+          isAdmin={auth.session?.role === "admin"}
+          onAdmin={() => router.push("/admin")}
+          onLogout={() => void auth.logout()}
         />
       }
     >

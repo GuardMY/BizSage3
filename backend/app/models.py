@@ -94,3 +94,18 @@ class Report(Base):
     created_at = Column(DateTime, nullable=False, default=_utcnow)
 
     session = relationship("DiagnosisSession", back_populates="reports")
+
+
+class TemporaryAccessToken(Base):
+    """A revocable, expiring access token. Only its SHA-256 digest is stored."""
+
+    __tablename__ = "temporary_access_tokens"
+
+    id = Column(String, primary_key=True, default=_new_id)
+    name = Column(String(80), nullable=False)
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    token_prefix = Column(String(16), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    last_used_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
