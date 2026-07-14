@@ -379,7 +379,7 @@ class WorkflowManager:
         await self._checkpointer.setup()
 
         self._graph = graph.compile(checkpointer=self._checkpointer)
-        logger.info("WorkflowManager started with %s model", settings.llm_mode)
+        logger.info("WorkflowManager started")
 
     async def shutdown(self):
         """Clean up resources."""

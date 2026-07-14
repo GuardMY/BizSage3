@@ -18,9 +18,6 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.0
     llm_max_tokens: int = 2048
 
-    # LLM mode: "openai" or "mock"
-    llm_mode: str = "openai"
-
     # Completeness threshold per design doc
     complete_threshold: int = 80
 
