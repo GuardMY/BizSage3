@@ -32,6 +32,12 @@ class DiagnosisSession(Base):
     __tablename__ = "diagnosis_sessions"
 
     id = Column(String, primary_key=True, default=_new_id)
+    owner_token_id = Column(
+        String,
+        ForeignKey("temporary_access_tokens.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     title = Column(String, nullable=False, default="新的运营诊断")
     status = Column(String, nullable=False, default="collecting")  # collecting|analyzing|completed|failed
     stage = Column(String, nullable=False, default="init")

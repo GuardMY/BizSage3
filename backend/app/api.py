@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.db import get_session as get_db_session
+from app.auth import Principal, get_current_principal
 from app.domain.schemas import ResumeInput
 from app.api_schemas import (
     SessionSummary,
@@ -51,9 +52,12 @@ async def health_ready():
 # =============================================================================
 
 @router.get("/sessions", response_model=list[SessionSummary])
-async def list_sessions(db: AsyncSession = Depends(get_db_session)):
-    """List all diagnosis sessions, newest first."""
-    repo = SessionRepository(db)
+async def list_sessions(
+    principal: Principal = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """List accessible diagnosis sessions, newest first."""
+    repo = SessionRepository.for_principal(db, principal)
     sessions = await repo.list_sessions()
     return [session_summary(s) for s in sessions]
 
@@ -71,9 +75,12 @@ CONVERSATION_STARTER = "来聊聊你的业务吧——你目前在做什么行�
 
 
 @router.post("/sessions", response_model=SessionDetail, status_code=201)
-async def create_session(db: AsyncSession = Depends(get_db_session)):
+async def create_session(
+    principal: Principal = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db_session),
+):
     """Create a new diagnosis session with a welcome message."""
-    repo = SessionRepository(db)
+    repo = SessionRepository.for_principal(db, principal)
     session = await repo.create_session()
 
     # Add welcome assistant message so the user sees a greeting immediately
@@ -88,9 +95,13 @@ async def create_session(db: AsyncSession = Depends(get_db_session)):
 
 
 @router.get("/sessions/{session_id}", response_model=SessionDetail)
-async def get_session(session_id: str, db: AsyncSession = Depends(get_db_session)):
+async def get_session(
+    session_id: str,
+    principal: Principal = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db_session),
+):
     """Get a session by ID with all details."""
-    repo = SessionRepository(db)
+    repo = SessionRepository.for_principal(db, principal)
     session = await repo.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -98,9 +109,16 @@ async def get_session(session_id: str, db: AsyncSession = Depends(get_db_session
 
 
 @router.delete("/sessions/{session_id}", status_code=204)
-async def delete_session(session_id: str, db: AsyncSession = Depends(get_db_session)):
+async def delete_session(
+    session_id: str,
+    principal: Principal = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db_session),
+):
     """Delete a session and all its data."""
-    repo = SessionRepository(db)
+    repo = SessionRepository.for_principal(db, principal)
+    session = await repo.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
     await report_task_manager.cancel(session_id)
     deleted = await repo.delete_session(session_id)
     if not deleted:
@@ -128,6 +146,7 @@ STAGE_LABELS = {
 async def chat_message(
     session_id: str,
     body: MessageRequest,
+    principal: Principal = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db_session),
 ):
     """Send a message and receive SSE stream of workflow events.
@@ -144,7 +163,7 @@ async def chat_message(
             detail="诊断报告已改为后台生成，请使用 POST /sessions/{id}/reports",
         )
 
-    repo = SessionRepository(db)
+    repo = SessionRepository.for_principal(db, principal)
 
     # 1. Load session
     session = await repo.get_session(session_id)
@@ -305,10 +324,11 @@ async def _emit_result(repo: SessionRepository, session, result: dict):
 )
 async def start_report_generation(
     session_id: str,
+    principal: Principal = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db_session),
 ):
     """Start one background report task from the current conversation snapshot."""
-    repo = SessionRepository(db)
+    repo = SessionRepository.for_principal(db, principal)
     session = await repo.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -335,10 +355,11 @@ async def start_report_generation(
 )
 async def list_reports(
     session_id: str,
+    principal: Principal = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db_session),
 ):
     """List all reports for a session, newest first."""
-    repo = SessionRepository(db)
+    repo = SessionRepository.for_principal(db, principal)
     session = await repo.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -353,10 +374,14 @@ async def list_reports(
 async def get_report_by_id(
     session_id: str,
     report_id: str,
+    principal: Principal = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db_session),
 ):
     """Get one diagnosis report by ID."""
-    report = await SessionRepository(db).get_report(session_id, report_id)
+    report = await SessionRepository.for_principal(db, principal).get_report(
+        session_id,
+        report_id,
+    )
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
     return report_response(report)
@@ -366,12 +391,16 @@ async def get_report_by_id(
 async def download_report_by_id(
     session_id: str,
     report_id: str,
+    principal: Principal = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db_session),
 ):
     """Download one report as Markdown."""
     from fastapi.responses import PlainTextResponse
 
-    report = await SessionRepository(db).get_report(session_id, report_id)
+    report = await SessionRepository.for_principal(db, principal).get_report(
+        session_id,
+        report_id,
+    )
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
     return PlainTextResponse(
@@ -383,9 +412,13 @@ async def download_report_by_id(
     )
 
 @router.get("/sessions/{session_id}/report", response_model=ReportResponse)
-async def get_report(session_id: str, db: AsyncSession = Depends(get_db_session)):
+async def get_report(
+    session_id: str,
+    principal: Principal = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db_session),
+):
     """Get the latest diagnosis report for backward compatibility."""
-    repo = SessionRepository(db)
+    repo = SessionRepository.for_principal(db, principal)
     session = await repo.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -397,11 +430,15 @@ async def get_report(session_id: str, db: AsyncSession = Depends(get_db_session)
 
 
 @router.get("/sessions/{session_id}/report/download")
-async def download_report(session_id: str, db: AsyncSession = Depends(get_db_session)):
+async def download_report(
+    session_id: str,
+    principal: Principal = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db_session),
+):
     """Download the latest report as Markdown for backward compatibility."""
     from fastapi.responses import PlainTextResponse
 
-    repo = SessionRepository(db)
+    repo = SessionRepository.for_principal(db, principal)
     reports = await repo.list_reports(session_id)
     if not reports:
         raise HTTPException(status_code=404, detail="Report not found")

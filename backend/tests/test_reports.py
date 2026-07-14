@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api import start_report_generation
+from app.auth import Principal
 from app.models import Base
 from app.repository import SessionRepository
 from app.services.report_service import ReportContext, ReportTaskManager
@@ -25,7 +26,7 @@ async def report_db_factory():
 @pytest.mark.asyncio
 async def test_report_generation_slot_is_atomic(report_db_factory):
     async with report_db_factory() as db:
-        repo = SessionRepository(db)
+        repo = SessionRepository.for_system(db)
         session = await repo.create_session()
         await db.commit()
 
@@ -41,7 +42,7 @@ async def test_report_generation_slot_is_atomic(report_db_factory):
 @pytest.mark.asyncio
 async def test_reports_are_appended_and_listed_newest_first(report_db_factory):
     async with report_db_factory() as db:
-        repo = SessionRepository(db)
+        repo = SessionRepository.for_system(db)
         session = await repo.create_session()
         first = await repo.save_report(session.id, "# 第一版", {})
         first.created_at = datetime(2026, 7, 14, 10, 0, 0)
@@ -60,7 +61,7 @@ async def test_background_task_persists_a_new_report(
     mock_model,
 ):
     async with report_db_factory() as db:
-        repo = SessionRepository(db)
+        repo = SessionRepository.for_system(db)
         session = await repo.create_session()
         session.scene = '{"industry": "电商"}'
         session.metrics = '["本月访客两万人"]'
@@ -81,7 +82,7 @@ async def test_background_task_persists_a_new_report(
     await manager.start(context)
 
     async with report_db_factory() as db:
-        repo = SessionRepository(db)
+        repo = SessionRepository.for_system(db)
         session = await repo.get_session(context.session_id)
         reports = await repo.list_reports(context.session_id)
 
@@ -97,7 +98,7 @@ async def test_start_report_api_rejects_a_second_running_task(
     monkeypatch,
 ):
     async with report_db_factory() as db:
-        repo = SessionRepository(db)
+        repo = SessionRepository.for_system(db)
         session = await repo.create_session()
         await db.commit()
         monkeypatch.setattr(
@@ -105,11 +106,12 @@ async def test_start_report_api_rejects_a_second_running_task(
             lambda context: None,
         )
 
-        accepted = await start_report_generation(session.id, db)
+        principal = Principal(role="admin", expires_at=datetime.max)
+        accepted = await start_report_generation(session.id, principal, db)
         assert accepted.status == "generating"
 
         with pytest.raises(HTTPException) as exc_info:
-            await start_report_generation(session.id, db)
+            await start_report_generation(session.id, principal, db)
 
     assert exc_info.value.status_code == 409
     assert "正在生成" in exc_info.value.detail

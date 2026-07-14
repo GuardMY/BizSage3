@@ -6,7 +6,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import Principal, create_session_cookie, get_current_principal, require_admin
@@ -19,7 +19,7 @@ from app.auth_schemas import (
 )
 from app.config import settings
 from app.db import get_session as get_db_session
-from app.models import TemporaryAccessToken
+from app.models import DiagnosisSession, TemporaryAccessToken
 
 
 router = APIRouter(prefix="/api/v1")
@@ -216,5 +216,10 @@ async def delete_temporary_token(
         raise HTTPException(status_code=404, detail="临时令牌不存在")
     if token.revoked_at is None:
         raise HTTPException(status_code=409, detail="请先撤销临时令牌后再删除")
+    await db.execute(
+        update(DiagnosisSession)
+        .where(DiagnosisSession.owner_token_id == token_id)
+        .values(owner_token_id=None)
+    )
     await db.delete(token)
     await db.commit()

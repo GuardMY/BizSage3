@@ -2,13 +2,16 @@
 
 import json
 import uuid
-from typing import Optional, List
+from typing import TYPE_CHECKING, Optional, List
 from datetime import datetime
 
 from sqlalchemy import select, delete, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DiagnosisSession, Message, Report
+
+if TYPE_CHECKING:
+    from app.auth import Principal
 
 
 def _new_id() -> str:
@@ -22,14 +25,64 @@ def _utcnow() -> datetime:
 class SessionRepository:
     """Async data access for diagnosis sessions."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(
+        self,
+        db: AsyncSession,
+        *,
+        owner_token_id: Optional[str],
+        unrestricted: bool,
+    ):
+        if not unrestricted and owner_token_id is None:
+            raise ValueError("Restricted repository requires owner_token_id")
         self.db = db
+        self.owner_token_id = owner_token_id
+        self.unrestricted = unrestricted
+
+    @classmethod
+    def for_principal(
+        cls,
+        db: AsyncSession,
+        principal: "Principal",
+    ) -> "SessionRepository":
+        """Create an admin-wide or token-scoped repository for an HTTP request."""
+        if principal.role == "user":
+            if not principal.token_id:
+                raise ValueError("User principal must include token_id")
+            return cls(
+                db,
+                owner_token_id=principal.token_id,
+                unrestricted=False,
+            )
+        return cls(db, owner_token_id=None, unrestricted=True)
+
+    @classmethod
+    def for_system(cls, db: AsyncSession) -> "SessionRepository":
+        """Create an unrestricted repository for trusted background work."""
+        return cls(db, owner_token_id=None, unrestricted=True)
+
+    def _scope_sessions(self, stmt):
+        if not self.unrestricted:
+            stmt = stmt.where(
+                DiagnosisSession.owner_token_id == self.owner_token_id
+            )
+        return stmt
+
+    async def _require_session_access(self, session_id: str) -> None:
+        if self.unrestricted:
+            return
+        stmt = self._scope_sessions(
+            select(DiagnosisSession.id).where(
+                DiagnosisSession.id == session_id
+            )
+        )
+        if (await self.db.execute(stmt)).scalar_one_or_none() is None:
+            raise PermissionError("Session is outside repository scope")
 
     # ---- Sessions ----
 
     async def list_sessions(self) -> List[DiagnosisSession]:
         """Return all sessions ordered by most recent first."""
-        stmt = (
+        stmt = self._scope_sessions(
             select(DiagnosisSession)
             .order_by(DiagnosisSession.updated_at.desc())
         )
@@ -40,6 +93,7 @@ class SessionRepository:
         """Create a new empty diagnosis session."""
         session = DiagnosisSession(
             id=_new_id(),
+            owner_token_id=self.owner_token_id,
             title="新的运营诊断",
             status="collecting",
             stage="init",
@@ -52,7 +106,7 @@ class SessionRepository:
     async def get_session(self, session_id: str) -> Optional[DiagnosisSession]:
         """Get a session by ID, including messages and reports."""
         from sqlalchemy.orm import selectinload
-        stmt = (
+        stmt = self._scope_sessions(
             select(DiagnosisSession)
             .where(DiagnosisSession.id == session_id)
             .options(
@@ -83,6 +137,12 @@ class SessionRepository:
             session: The ORM object (already tracked by the session).
             workflow_state: The dict returned by LangGraph workflow.
         """
+        if (
+            not self.unrestricted
+            and session.owner_token_id != self.owner_token_id
+        ):
+            raise PermissionError("Session is outside repository scope")
+
         session.stage = workflow_state.get("stage", session.stage)
         session.scene = json.dumps(workflow_state.get("user_scene", {}), ensure_ascii=False)
 
@@ -123,6 +183,8 @@ class SessionRepository:
         client_message_id: str,
     ) -> Message:
         """Add a user message to a session. Returns the created message."""
+        await self._require_session_access(session_id)
+
         # Check idempotency
         existing = await self.find_client_message(session_id, client_message_id)
         if existing:
@@ -150,6 +212,7 @@ class SessionRepository:
         content: str,
     ) -> Message:
         """Add an assistant message to a session."""
+        await self._require_session_access(session_id)
         max_seq = await self._max_sequence(session_id)
         seq = max_seq + 1
 
@@ -170,8 +233,9 @@ class SessionRepository:
         client_message_id: str,
     ) -> Optional[Message]:
         """Check if a client message was already processed (idempotency)."""
-        stmt = (
+        stmt = self._scope_sessions(
             select(Message)
+            .join(DiagnosisSession, Message.session_id == DiagnosisSession.id)
             .where(
                 Message.session_id == session_id,
                 Message.client_message_id == client_message_id,
@@ -182,8 +246,9 @@ class SessionRepository:
 
     async def _max_sequence(self, session_id: str) -> int:
         """Get the highest sequence number for a session."""
-        stmt = (
+        stmt = self._scope_sessions(
             select(func.max(Message.sequence))
+            .join(DiagnosisSession, Message.session_id == DiagnosisSession.id)
             .where(Message.session_id == session_id)
         )
         result = await self.db.execute(stmt)
@@ -199,6 +264,7 @@ class SessionRepository:
         diagnosis: dict,
     ) -> Report:
         """Create a new immutable report for a session."""
+        await self._require_session_access(session_id)
         report = Report(
             id=_new_id(),
             session_id=session_id,
@@ -214,24 +280,30 @@ class SessionRepository:
         """List reports for a session, newest first."""
         stmt = (
             select(Report)
+            .join(DiagnosisSession, Report.session_id == DiagnosisSession.id)
             .where(Report.session_id == session_id)
             .order_by(Report.created_at.desc(), Report.id.desc())
         )
+        stmt = self._scope_sessions(stmt)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
     async def get_report(self, session_id: str, report_id: str) -> Optional[Report]:
         """Get one report while enforcing session ownership."""
-        stmt = select(Report).where(
-            Report.id == report_id,
-            Report.session_id == session_id,
+        stmt = self._scope_sessions(
+            select(Report)
+            .join(DiagnosisSession, Report.session_id == DiagnosisSession.id)
+            .where(
+                Report.id == report_id,
+                Report.session_id == session_id,
+            )
         )
         result = await self.db.execute(stmt)
         return result.scalars().first()
 
     async def try_start_report_generation(self, session_id: str) -> bool:
         """Atomically acquire the single report-generation slot for a session."""
-        stmt = (
+        stmt = self._scope_sessions(
             update(DiagnosisSession)
             .where(
                 DiagnosisSession.id == session_id,
@@ -257,11 +329,12 @@ class SessionRepository:
         }
         if error is None:
             values["status"] = "completed"
-        await self.db.execute(
+        stmt = self._scope_sessions(
             update(DiagnosisSession)
             .where(DiagnosisSession.id == session_id)
             .values(**values)
         )
+        await self.db.execute(stmt)
         await self.db.flush()
 
     async def reset_running_report_generations(self) -> None:

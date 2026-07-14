@@ -75,7 +75,8 @@ class ReportTaskManager:
 
     async def startup(self) -> None:
         async with self._session_factory() as db:
-            await SessionRepository(db).reset_running_report_generations()
+            repo = SessionRepository.for_system(db)
+            await repo.reset_running_report_generations()
             await db.commit()
 
     def start(self, context: ReportContext) -> asyncio.Task[None]:
@@ -122,7 +123,7 @@ class ReportTaskManager:
             )
 
             async with self._session_factory() as db:
-                repo = SessionRepository(db)
+                repo = SessionRepository.for_system(db)
                 await repo.save_report(
                     context.session_id,
                     markdown,
@@ -148,7 +149,7 @@ class ReportTaskManager:
     async def _mark_failed(self, session_id: str, message: str) -> None:
         try:
             async with self._session_factory() as db:
-                await SessionRepository(db).finish_report_generation(
+                await SessionRepository.for_system(db).finish_report_generation(
                     session_id,
                     error=message,
                 )
