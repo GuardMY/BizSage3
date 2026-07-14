@@ -102,6 +102,7 @@ class MockDiagnosisModel(DiagnosisModel):
         raw_facts: List[str],
         completeness: CompletenessEval,
         scene: Dict[str, str],
+        messages: List[Dict[str, str]] = None,
     ) -> str:
         industry = scene.get("industry", "未知行业")
         warning = ""

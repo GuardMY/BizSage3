@@ -227,8 +227,8 @@ def _make_await_input():
 def _make_generate_report(model: DiagnosisModel):
     """Node: Generate the final diagnosis report.
 
-    Feeds all collected raw facts + completeness info to the LLM
-    and produces a structured markdown report.
+    Feeds the conversation, collected facts, scene, and completeness info to
+    the LLM and produces a context-specific markdown report.
     """
 
     async def node_generate_report(state: dict) -> dict:
@@ -237,13 +237,18 @@ def _make_generate_report(model: DiagnosisModel):
         raw_facts = state.get("raw_facts", [])
         comp_data = state.get("completeness", {})
         scene = state.get("user_scene", {})
-        force = state.get("force_diagnosis", False)
+        messages = state.get("messages", [])
 
         completeness = CompletenessEval(**comp_data) if comp_data else CompletenessEval()
 
-        report = await model.generate_report(raw_facts, completeness, scene)
+        report = await model.generate_report(
+            raw_facts,
+            completeness,
+            scene,
+            messages=messages,
+        )
 
-        messages = list(state.get("messages", []))
+        messages = list(messages)
         messages.append({"role": "assistant", "content": report})
 
         return {

@@ -12,8 +12,7 @@ from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
 
-from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import SystemMessage, HumanMessage, convert_to_messages
 from langchain_openai import ChatOpenAI
 
 from app.config import settings
@@ -77,8 +76,9 @@ class DiagnosisModel(ABC):
         raw_facts: List[str],
         completeness: CompletenessEval,
         scene: Dict[str, str],
+        messages: Optional[List[Dict[str, str]]] = None,
     ) -> str:
-        """Generate structured diagnosis report from facts."""
+        """Generate a diagnosis report from the full conversation context."""
         ...
 
 
@@ -98,23 +98,22 @@ class OpenAICompatibleModel(DiagnosisModel):
             max_tokens=settings.llm_max_tokens,
         )
 
-    async def _invoke_chat(self, system: str, user: str, history: List[Dict[str, str]] = None, node_name: str = "") -> str:
+    async def _invoke_chat(
+        self,
+        system: str,
+        user: str,
+        *,
+        history: Optional[List[Dict[str, str]]] = None,
+        node_name: str = "",
+    ) -> str:
         """Invoke LLM and return plain text. Optionally include prior conversation as real messages."""
+        messages = [SystemMessage(content=system)]
         if history:
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", system),
-                MessagesPlaceholder(variable_name="history"),
-                ("user", user),
-            ])
-        else:
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", system),
-                ("user", user),
-            ])
+            messages.extend(convert_to_messages(history))
+        messages.append(HumanMessage(content=user))
+
         logger.info("[%s] LLM Chat request\nsystem: %s\nhistory: %s\nuser: %s", node_name, system, history, user)
-        chain = prompt | self.llm
-        invoke_args = {"history": history} if history else {}
-        res = await chain.ainvoke(invoke_args)
+        res = await self.llm.ainvoke(messages)
         content = res.content
         logger.info("[%s] LLM Chat response:\n%s", node_name, content)
         return content
@@ -165,7 +164,11 @@ class OpenAICompatibleModel(DiagnosisModel):
 3. 直接输出对话文本，不要JSON"""
 
         try:
-            return await self._invoke_chat(system, user_message, "greeting_guide 问候引导")
+            return await self._invoke_chat(
+                system,
+                user_message,
+                node_name="greeting_guide 问候引导",
+            )
         except Exception:
             return (
                 "你好！我是 BizSage 运营诊断助手。\n\n"
@@ -289,7 +292,11 @@ class OpenAICompatibleModel(DiagnosisModel):
 直接输出分析文本，不要JSON。"""
 
         try:
-            return await self._invoke_chat(system, "请基于以上事实做运营诊断分析", "diagnose 运营诊断")
+            return await self._invoke_chat(
+                system,
+                "请基于以上事实做运营诊断分析",
+                node_name="diagnose 运营诊断",
+            )
         except Exception:
             return "⚠️ 抱歉，当前 AI 服务暂时不可用，无法完成诊断分析。请稍后重试，或联系管理员检查模型服务状态。"
 
@@ -300,49 +307,61 @@ class OpenAICompatibleModel(DiagnosisModel):
         raw_facts: List[str],
         completeness: CompletenessEval,
         scene: Dict[str, str],
+        messages: Optional[List[Dict[str, str]]] = None,
     ) -> str:
-        industry = scene.get("industry", "未知行业")
+        industry = scene.get("industry") or "未知行业"
+        scene_text = json.dumps(scene, ensure_ascii=False) if scene else "（未识别）"
         facts_text = "\n".join(f"- {f}" for f in raw_facts) if raw_facts else "（暂无运营数据）"
+        summary = completeness.summary or "（暂无概括）"
+        missing_text = (
+            "\n".join(f"- {aspect}" for aspect in completeness.missing_aspects)
+            if completeness.missing_aspects
+            else "（暂无）"
+        )
+        history = [
+            {"role": message.get("role", "user"), "content": message.get("content", "")}
+            for message in (messages or [])[-100:]
+            if message.get("role") in {"user", "assistant"} and message.get("content")
+        ]
 
-        warning = ""
+        coverage_instruction = "无需添加信息完备度警告。"
         if completeness.score < 80:
-            warning = "⚠️ **注意：当前信息完备度为 {}%，报告可能不够全面，建议继续补充信息后重新生成。**\n\n".format(completeness.score)
+            coverage_instruction = (
+                f"当前信息完备度为 {completeness.score}%，请在报告开头明确提示结论的局限性。"
+            )
 
         system = f"""你是{industry}行业的资深运营诊断专家。
 
-【商户背景】行业：{industry}
+【业务场景】
+{scene_text}
 
-【已有运营信息】
+【已提取的运营事实】
 {facts_text}
 
-【信息完备度】{completeness.score}%
+【信息完备度评估】
+- 得分：{completeness.score}%
+- 概括：{summary}
+- 尚缺信息：
+{missing_text}
 
-请生成诊断报告。要求：
-1. {warning}
-2. 只基于已有事实分析，不编造数据
-3. 根据{industry}行业特征自行决定报告结构——有多少事实就分析多少维度
-4. 没有覆盖的方向统一归入"信息盲区"，说明还需收集什么
-5. 每个维度包含：现状 → 判断 → 建议
-6. 输出完整Markdown格式，用##二级标题分节
-7. 用{industry}从业者熟悉的语言，不用"流量""转化率""指标"等通用术语"""
+请结合上述结构化信息和随后提供的对话上下文，自主生成诊断报告。要求：
+1. 只基于上下文中已经出现的信息分析，不编造数据或经营背景
+2. 根据{industry}行业特征和已有信息自行决定分析维度、报告结构与详略，不套用固定维度
+3. 对有依据的关键信息给出现状、判断、可能原因和可执行建议，并区分事实与推断
+4. 未覆盖但会影响判断的内容统一归入“信息盲区”，说明需要补充什么
+5. {coverage_instruction}
+6. 输出可直接展示的完整 Markdown，使用二级标题分节
+7. 使用{industry}从业者熟悉的具体语言，避免空泛套话"""
         try:
             return await self._invoke_chat(
                 system,
-                "请生成完整的运营诊断报告",
-                "generate_report 生成报告",
+                "请基于以上全部上下文生成完整的运营诊断报告",
+                history=history,
+                node_name="generate_report 生成报告",
             )
         except Exception:
-            return (
-                f"# 诊断报告\n\n"
-                f"⚠️ **注意：AI 服务暂时不可用，以下为基于已知数据的静态汇总，非完整诊断报告。请稍后重试或联系管理员。**\n\n"
-                f"{warning}\n"
-                f"## 诊断概览\n\n"
-                f"基于{len(raw_facts)}条运营信息，为{industry}行业商户生成初步诊断。\n\n"
-                f"## 已知信息\n\n"
-                f"{facts_text}\n\n"
-                f"## 信息盲区\n\n"
-                f"当前信息尚不完整，建议补充更多运营数据后重新生成详细报告。\n"
-            )
+            logger.exception("[generate_report] 诊断报告生成失败")
+            raise
 
 
 

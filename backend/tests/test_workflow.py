@@ -1,5 +1,7 @@
 """Tests for the conversational LangGraph workflow."""
 
+from unittest.mock import AsyncMock
+
 import pytest
 from app.services.workflow import WorkflowManager
 from app.domain.schemas import ResumeInput
@@ -107,6 +109,25 @@ class TestWorkflowComplete:
 
         final_report = result2.get("final_report", "")
         assert final_report, "Expected a report to be generated"
+
+    @pytest.mark.asyncio
+    async def test_generate_report_receives_conversation_context(self, wf: WorkflowManager):
+        """The report model should receive the accumulated chat, not only extracted facts."""
+        await wf.start("test-session-report-context", "我是做电商的，本月访客两万人")
+        wf._model.generate_report = AsyncMock(return_value="# 上下文诊断报告")
+
+        result = await wf.resume(
+            "test-session-report-context",
+            ResumeInput(content="", action="diagnose_with_current_data"),
+        )
+
+        assert result["final_report"] == "# 上下文诊断报告"
+        call = wf._model.generate_report.await_args
+        assert call.kwargs["messages"]
+        assert any(
+            message.get("role") == "user" and "本月访客两万人" in message.get("content", "")
+            for message in call.kwargs["messages"]
+        )
 
     @pytest.mark.asyncio
     async def test_full_flow_with_enough_data(self, wf: WorkflowManager):
