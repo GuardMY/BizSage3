@@ -83,18 +83,27 @@ def make_initial_state(user_message: str, existing_messages: list = None) -> dic
 # =============================================================================
 
 def _make_scene_recognize(model: DiagnosisModel):
-    """Node 1: Scene recognition — identify industry, stage."""
+    """Node 1: Scene recognition — identify industry, stage.
+
+    On the first run, looks at the initial user message.
+    On retry (after greeting_guide), looks at the full conversation to
+    extract the industry from accumulated context.
+    """
 
     async def node_scene_recognize(state: dict) -> dict:
+        """节点1：场景识别 —— 识别用户所在的行业、商业模式、阶段和诊断目标。"""
         logger.info("Node: scene_recognize")
         messages = state.get("messages", [])
         if not messages:
             return {"stage": "scene_recognize"}
 
-        user_msgs = [m for m in messages if m.get("role") == "user"]
-        last_user = user_msgs[-1]["content"] if user_msgs else messages[-1].get("content", "")
+        # Build a combined context from the conversation for better recognition
+        user_msgs = [m.get("content", "") for m in messages if m.get("role") == "user"]
+        # Use the full user dialogue as context (last 5 messages max)
+        context = "\n".join(user_msgs[-5:])
 
-        scene = await model.recognize_scene(last_user)
+        scene = await model.recognize_scene(context)
+        logger.info("Scene recognized: industry=%s", scene.industry)
         return {
             "user_scene": scene.model_dump(),
             "stage": "scene_recognize",
@@ -107,6 +116,7 @@ def _make_greeting_guide(model: DiagnosisModel):
     """Node: Greeting guide — when no industry was identified."""
 
     async def node_greeting_guide(state: dict) -> dict:
+        """节点2：引导问候 —— 当未识别到行业时，生成自我介绍和引导性问题。"""
         logger.info("Node: greeting_guide")
         messages = state.get("messages", [])
 
@@ -135,6 +145,7 @@ def _make_chat_extract(model: DiagnosisModel):
     """
 
     async def node_chat_extract(state: dict) -> dict:
+        """节点3：聊天提取 —— 从对话中提取运营事实并调用 LLM 评估信息完备度。"""
         logger.info("Node: chat_extract")
         messages = state.get("messages", [])
         existing_facts = state.get("raw_facts", [])
@@ -165,6 +176,7 @@ def _make_agent_reply(model: DiagnosisModel):
     """
 
     async def node_agent_reply(state: dict) -> dict:
+        """节点4：智能回复 —— 基于完备度评估生成行业感知的追问回复，引导用户补充信息。"""
         logger.info("Node: agent_reply")
         raw_facts = state.get("raw_facts", [])
         comp_data = state.get("completeness", {})
@@ -172,7 +184,7 @@ def _make_agent_reply(model: DiagnosisModel):
 
         completeness = CompletenessEval(**comp_data) if comp_data else CompletenessEval()
 
-        reply = await model.agent_reply(raw_facts, completeness, scene)
+        reply = await model.agent_reply(raw_facts, completeness, scene, state.get("messages", []))
 
         messages = list(state.get("messages", []))
         messages.append({"role": "assistant", "content": reply})
@@ -194,6 +206,7 @@ def _make_await_input():
     """
 
     async def node_await_input(state: dict) -> dict:
+        """节点5：等待输入 —— 通过 LangGraph interrupt() 暂停工作流，等待用户回复（人机交互暂停点）。"""
         logger.info("Node: await_input (interrupt)")
         question = state.get("pending_question", "请提供更多信息")
 
@@ -219,6 +232,7 @@ def _make_generate_report(model: DiagnosisModel):
     """
 
     async def node_generate_report(state: dict) -> dict:
+        """节点6：生成报告 —— 汇总所有收集的运营事实和完备度信息，生成结构化诊断报告。"""
         logger.info("Node: generate_report")
         raw_facts = state.get("raw_facts", [])
         comp_data = state.get("completeness", {})
@@ -246,24 +260,27 @@ def _make_generate_report(model: DiagnosisModel):
 # =============================================================================
 
 def route_after_scene(state: dict) -> str:
-    """After scene recognition: if no industry identified, guide user."""
+    """场景识别后路由：未识别到行业 → 引导问候；已识别 → 进入聊天提取。"""
     scene = state.get("user_scene", {})
     if not scene or not scene.get("industry", ""):
         return "greeting_guide"
-    # First message with scene? Check if we should go to chat_extract
     return "chat_extract"
 
 
 def route_after_await(state: dict) -> str:
-    """After user input: chat_extract (normal) or generate_report (forced)."""
+    """等待输入后路由：未识别场景→重新识别；强制诊断→生成报告；正常→聊天提取。"""
     force = state.get("force_diagnosis", False)
     if force:
         return "generate_report"
+    # 如果还没有识别出行业，先回到场景识别再试
+    scene = state.get("user_scene", {})
+    if not scene or not scene.get("industry", ""):
+        return "scene_recognize"
     return "chat_extract"
 
 
 def route_after_greeting(state: dict) -> str:
-    """After greeting guide: go to await_input."""
+    """引导问候后路由：进入等待用户输入。"""
     return "await_input"
 
 
@@ -288,18 +305,19 @@ def build_graph(model: Optional[DiagnosisModel] = None) -> StateGraph:
 
     graph = StateGraph(AgentState)
 
-    # Register nodes
-    graph.add_node("scene_recognize", _make_scene_recognize(model))
-    graph.add_node("greeting_guide", _make_greeting_guide(model))
-    graph.add_node("chat_extract", _make_chat_extract(model))
-    graph.add_node("agent_reply", _make_agent_reply(model))
-    graph.add_node("await_input", _make_await_input())
-    graph.add_node("generate_report", _make_generate_report(model))
+    # 注册所有节点
+    graph.add_node("scene_recognize", _make_scene_recognize(model))     # 节点1：场景识别
+    graph.add_node("greeting_guide", _make_greeting_guide(model))       # 节点2：引导问候
+    graph.add_node("chat_extract", _make_chat_extract(model))           # 节点3：聊天提取
+    graph.add_node("agent_reply", _make_agent_reply(model))             # 节点4：智能回复
+    graph.add_node("await_input", _make_await_input())                  # 节点5：等待输入
+    graph.add_node("generate_report", _make_generate_report(model))     # 节点6：生成报告
 
-    # Build edges
+    # 构建边
+    # START → 场景识别
     graph.add_edge(START, "scene_recognize")
 
-    # scene_recognize → greeting_guide (no industry) or chat_extract (has industry)
+    # 场景识别 → 引导问候（未识别到行业）或 聊天提取（已识别到行业）
     graph.add_conditional_edges(
         "scene_recognize",
         route_after_scene,
@@ -309,22 +327,23 @@ def build_graph(model: Optional[DiagnosisModel] = None) -> StateGraph:
         },
     )
 
-    # greeting_guide → await_input → back to scene_recognize (to re-identify)
+    # 引导问候 → 等待输入 → 未识别行业则回到场景识别，否则进入聊天提取
     graph.add_edge("greeting_guide", "await_input")
     graph.add_conditional_edges(
         "await_input",
         route_after_await,
         {
-            "chat_extract": "chat_extract",
-            "generate_report": "generate_report",
+            "scene_recognize": "scene_recognize",     # 未识别 → 重新识别行业
+            "chat_extract": "chat_extract",           # 继续信息收集
+            "generate_report": "generate_report",     # 强制诊断
         },
     )
 
-    # chat_extract → agent_reply → await_input → loop back to chat_extract
+    # 聊天提取 → 智能回复 → 等待输入 → 循环回到聊天提取（信息收集主循环）
     graph.add_edge("chat_extract", "agent_reply")
     graph.add_edge("agent_reply", "await_input")
 
-    # generate_report → END
+    # 生成报告 → 结束
     graph.add_edge("generate_report", END)
 
     return graph

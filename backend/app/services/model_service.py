@@ -7,17 +7,22 @@ Provides:
 """
 
 import json
+import logging
 import re
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Any
 
-from langchain_core.prompts import ChatPromptTemplate
+logger = logging.getLogger(__name__)
+
+from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 
 from app.config import settings
 from app.domain.schemas import (
     Scene,
     CompletenessEval,
+    ChatExtractOutput,
 )
 
 
@@ -54,6 +59,7 @@ class DiagnosisModel(ABC):
         raw_facts: List[str],
         completeness: CompletenessEval,
         scene: Dict[str, str],
+        messages: List[Dict[str, str]] = None,
     ) -> str:
         """Generate the next conversational reply to guide the user."""
         ...
@@ -94,40 +100,49 @@ class OpenAICompatibleModel(DiagnosisModel):
             max_tokens=settings.llm_max_tokens,
         )
 
-    async def _invoke_json(self, system: str, user: str) -> str:
-        """Invoke LLM with system+user prompt, return raw content."""
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system),
-            ("user", user),
-        ])
+    async def _invoke_chat(self, system: str, user: str, history: List[Dict[str, str]] = None, node_name: str = "") -> str:
+        """Invoke LLM and return plain text. Optionally include prior conversation as real messages."""
+        if history:
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", system),
+                MessagesPlaceholder(variable_name="history"),
+                ("user", user),
+            ])
+        else:
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", system),
+                ("user", user),
+            ])
+        logger.info("[%s] LLM Chat request\nsystem: %s\nhistory: %s\nuser: %s", node_name, system, history, user)
         chain = prompt | self.llm
-        res = await chain.ainvoke({})
-        return res.content
+        invoke_args = {"history": history} if history else {}
+        res = await chain.ainvoke(invoke_args)
+        content = res.content
+        logger.info("[%s] LLM Chat response:\n%s", node_name, content)
+        return content
 
-    async def _invoke_chat(self, system: str, user: str) -> str:
-        """Invoke LLM and return plain text (no JSON enforcement)."""
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system),
-            ("user", user),
-        ])
-        chain = prompt | self.llm
-        res = await chain.ainvoke({})
-        return res.content
-
-    # ─── Scene Recognition (unchanged) ──────────────────────────────────
+    # ─── Scene Recognition ──────────────────────────────────────────────
 
     async def recognize_scene(self, user_message: str) -> Scene:
-        system = """你是运营诊断场景识别专家，严格根据用户对话内容提取场景信息，仅输出JSON结构化数据。
-输出字段固定：
-- industry: 从对话中提取的行业类别，自由命名，尽量具体（例如：火锅、茶饮、快餐、服装零售、在线教育、SaaS等），不要用笼统的大类。如果用户提到多个相关行业，选最核心的那个
+        """Identify the user's industry from conversation context.
 
-无信息则填空字符串，禁止输出多余解释、禁止自由发挥。
-仅输出纯JSON，不要markdown代码块包裹。"""
+        Uses with_structured_output(Scene) — the LLM is forced to emit a
+        tool call matching the Scene schema. Returns a Scene instance
+        directly; no JSON parsing needed.
+        """
+        system = """你是运营诊断场景识别专家。根据用户对话内容识别其所在行业。
+
+行业命名规则：尽量具体，如"火锅""茶饮""SaaS""服装零售"，不要用笼统大类。
+如果无法确定行业，industry 填空字符串。"""
         try:
-            content = await self._invoke_json(system, user_message)
-            data = self._parse_json(content)
-            return Scene(**data)
+            structured_llm = self.llm.with_structured_output(Scene)
+            messages = [
+                SystemMessage(content=system),
+                HumanMessage(content=user_message),
+            ]
+            return await structured_llm.ainvoke(messages)
         except Exception:
+            logger.exception("[scene_recognize] 场景识别失败")
             return Scene()
 
     # ─── Greeting Guide ─────────────────────────────────────────────────
@@ -142,14 +157,14 @@ class OpenAICompatibleModel(DiagnosisModel):
 3. 直接输出对话文本，不要JSON"""
 
         try:
-            return await self._invoke_chat(system, user_message)
+            return await self._invoke_chat(system, user_message, "greeting_guide 问候引导")
         except Exception:
             return (
                 "你好！我是 BizSage 运营诊断助手。\n\n"
                 "⚠️ 抱歉，当前 AI 服务暂时不可用，无法生成动态回复。请稍后重试，或联系管理员检查模型服务状态。"
             )
 
-    # ─── Chat Extract (NEW: facts + completeness in one call) ────────────
+    # ─── Chat Extract (structured output — no manual JSON parsing) ────
 
     async def chat_extract(
         self,
@@ -157,40 +172,40 @@ class OpenAICompatibleModel(DiagnosisModel):
         existing_facts: List[str],
         scene: Dict[str, str],
     ) -> tuple[List[str], CompletenessEval]:
+        """Extract new facts + evaluate completeness in one structured call.
+
+        Uses with_structured_output(ChatExtractOutput) — the LLM is forced
+        to emit a tool call matching the schema. Returns a ChatExtractOutput
+        Pydantic instance; no _parse_json needed.
+        """
         industry = scene.get("industry", "未知行业")
         existing_text = "\n".join(f"- {f}" for f in existing_facts) if existing_facts else "（无）"
-        history_text = json.dumps(messages, ensure_ascii=False)
+        recent = messages[-20:] if len(messages) > 20 else messages
+        history_text = json.dumps(recent, ensure_ascii=False)
 
-        system = f"""你是一位熟悉{industry}行业的运营顾问，正在和一个{industry}行业的经营者对话。
+        system = f"""你是{industry}行业运营顾问，和一位{industry}经营者对话。
 
-已记录的事实：
+已知事实：
 {existing_text}
 
-你的任务：
-1. 从最新对话中提取所有与经营相关的新信息，用一句话概括每条事实。保留用户的语气和模糊度——数值可以是"约""大概""左右"，定性描述也要记录（如"最近下雨天人流少""感觉回头客变多了"）。
-2. 基于{industry}行业的经营特征，综合评估目前收集到的信息完备度（0-100分）——思考：要做一份有参考价值的经营诊断，还需要哪些方面的信息。
-3. completeness.summary：用一句话概括目前已有信息，例如"目前掌握了客流和成本两方面情况，但营收和顾客反馈方面还是空白"
-4. completeness.missing_aspects：列出为了做好诊断还缺什么（3-5个方面，用行业口语描述）
-5. completeness.next_question：生成一条友好的追问，用{industry}从业者习惯的口语自然引导用户继续补充
-
-输出纯JSON（不要markdown包裹）：
-{{"new_facts": ["事实1", "事实2"], "completeness": {{"score": 50, "summary": "...", "missing_aspects": ["..."], "next_question": "..."}}}}
-
-禁止：编造未提及的数据、使用"指标""流量""转化率"等通用术语、堆砌数字"""
+任务：
+1. new_facts：从最近对话提取经营相关的新事实，每条约20字，保留模糊表述
+2. completeness：基于{industry}行业特征评估信息完备度
+   - score：0-100分
+   - summary：一句话概括现有信息覆盖情况
+   - missing_aspects：3-5个还缺的方面（行业口语）
+   - next_question：一句自然追问"""
 
         try:
-            content = await self._invoke_json(system, f"对话历史：{history_text}")
-            data = self._parse_json(content)
-            new_facts = data.get("new_facts", [])
-            comp_data = data.get("completeness", {})
-            completeness = CompletenessEval(
-                score=comp_data.get("score", 0),
-                summary=comp_data.get("summary", ""),
-                missing_aspects=comp_data.get("missing_aspects", []),
-                next_question=comp_data.get("next_question", ""),
-            )
-            return (new_facts, completeness)
-        except Exception:
+            structured_llm = self.llm.with_structured_output(ChatExtractOutput)
+            messages_payload = [
+                SystemMessage(content=system),
+                HumanMessage(content=f"对话历史：{history_text}"),
+            ]
+            result: ChatExtractOutput = await structured_llm.ainvoke(messages_payload)
+            return (result.new_facts, result.completeness)
+        except Exception as e:
+            logger.exception("[chat_extract] 对话提取失败: %s", e)
             return ([], CompletenessEval())
 
     # ─── Agent Reply (NEW: conversational guide) ────────────────────────
@@ -200,6 +215,7 @@ class OpenAICompatibleModel(DiagnosisModel):
         raw_facts: List[str],
         completeness: CompletenessEval,
         scene: Dict[str, str],
+        messages: List[Dict[str, str]] = None,
     ) -> str:
         industry = scene.get("industry", "未知行业")
         facts_text = "\n".join(f"- {f}" for f in raw_facts) if raw_facts else "（暂无）"
@@ -214,15 +230,17 @@ class OpenAICompatibleModel(DiagnosisModel):
 还缺什么：
 {missing_text}
 
-请像懂行的朋友一样简短回复（80字以内），语气自然不机械。内容包含：
+请像懂行的朋友一样简短回复（80字以内），语气自然不机械。严格按以下结构输出，不得多问：
 1. 对用户刚说的内容表达共情/确认（1句）
-2. 自然引导到下一个话题，方向参考"还缺什么"，但不要直接说"我还需要XX数据"，应该像朋友聊天一样引导
+2. 紧接着只问一个问题，之前没问过的，且只涉及一个方向，内容根据上下文生成。像朋友聊天一样自然引出，不要罗列、不要用"我还需要XX数据"这种句式
 3. 如果完备度 >= 80%，在回复末尾加上这一行提示：**[信息已比较充分，点击按钮即可生成诊断报告]**
 
 直接输出对话文本，不要JSON，不要markdown代码块。"""
 
+        recent = (messages or [])[-100:]
+
         try:
-            return await self._invoke_chat(system, "请生成回复")
+            return await self._invoke_chat(system, "请生成回复", history=recent, node_name="agent_reply 助手回复")
         except Exception:
             if completeness.score >= 80:
                 return "⚠️ 抱歉，当前 AI 服务暂时不可用，无法生成动态回复。信息可能已比较充分，你可以尝试点击生成诊断报告，或稍后重试。"
@@ -254,7 +272,7 @@ class OpenAICompatibleModel(DiagnosisModel):
 直接输出分析文本，不要JSON。"""
 
         try:
-            return await self._invoke_chat(system, "请基于以上事实做运营诊断分析")
+            return await self._invoke_chat(system, "请基于以上事实做运营诊断分析", "diagnose 运营诊断")
         except Exception:
             return "⚠️ 抱歉，当前 AI 服务暂时不可用，无法完成诊断分析。请稍后重试，或联系管理员检查模型服务状态。"
 
@@ -293,7 +311,8 @@ class OpenAICompatibleModel(DiagnosisModel):
         try:
             return await self._invoke_chat(
                 system,
-                "请生成完整的运营诊断报告"
+                "请生成完整的运营诊断报告",
+                "generate_report 生成报告",
             )
         except Exception:
             return (
@@ -308,14 +327,6 @@ class OpenAICompatibleModel(DiagnosisModel):
                 f"当前信息尚不完整，建议补充更多运营数据后重新生成详细报告。\n"
             )
 
-    @staticmethod
-    def _parse_json(content: str) -> dict:
-        """Parse JSON from LLM response, stripping markdown fences if present."""
-        text = content.strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\s*", "", text)
-            text = re.sub(r"\s*```$", "", text)
-        return json.loads(text)
 
 
 # =============================================================================
@@ -388,6 +399,7 @@ class MockDiagnosisModel(DiagnosisModel):
         raw_facts: List[str],
         completeness: CompletenessEval,
         scene: Dict[str, str],
+        messages: List[Dict[str, str]] = None,
     ) -> str:
         industry = scene.get("industry", "餐饮")
         next_q = completeness.next_question or "还有其他方面可以聊聊吗？"

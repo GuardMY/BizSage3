@@ -41,6 +41,12 @@ class CompletenessEval(BaseModel):
     next_question: str = Field(default="", description="建议追问的问题")
 
 
+class ChatExtractOutput(BaseModel):
+    """Combined output of chat_extract: new facts + completeness evaluation."""
+    new_facts: List[str] = Field(default_factory=list, description="新提取的运营事实")
+    completeness: CompletenessEval = Field(default_factory=CompletenessEval, description="信息完备度评估")
+
+
 class ExtractionResult(BaseModel):
     """Output of the extraction (scene + facts + anomalies) from conversation."""
     scene: Scene = Field(default_factory=Scene)
