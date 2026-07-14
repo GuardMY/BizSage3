@@ -14,6 +14,7 @@ import type {
   SessionDetail,
   MessageRequest,
   ReportResponse,
+  ReportGenerationResponse,
 } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -80,17 +81,28 @@ export async function deleteSession(id: string): Promise<void> {
 // Reports
 // ---------------------------------------------------------------------------
 
-/** Get the diagnosis report for a session. */
-export async function getReport(id: string): Promise<ReportResponse> {
+/** List all diagnosis reports for a session, newest first. */
+export async function getReports(id: string): Promise<ReportResponse[]> {
   const res = await fetch(
-    `${apiBase()}/sessions/${encodeURIComponent(id)}/report`,
+    `${apiBase()}/sessions/${encodeURIComponent(id)}/reports`,
   );
-  return handleResponse<ReportResponse>(res);
+  return handleResponse<ReportResponse[]>(res);
 }
 
-/** Get the download URL for a report (for direct link / <a> download). */
-export function getReportDownloadUrl(id: string): string {
-  return `${apiBase()}/sessions/${encodeURIComponent(id)}/report/download`;
+/** Start report generation in the backend. */
+export async function startReportGeneration(
+  id: string,
+): Promise<ReportGenerationResponse> {
+  const res = await fetch(
+    `${apiBase()}/sessions/${encodeURIComponent(id)}/reports`,
+    { method: "POST" },
+  );
+  return handleResponse<ReportGenerationResponse>(res);
+}
+
+/** Get the download URL for one report. */
+export function getReportDownloadUrl(id: string, reportId: string): string {
+  return `${apiBase()}/sessions/${encodeURIComponent(id)}/reports/${encodeURIComponent(reportId)}/download`;
 }
 
 // ---------------------------------------------------------------------------

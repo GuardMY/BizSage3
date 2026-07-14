@@ -83,17 +83,19 @@ def session_detail(session: DiagnosisSession) -> SessionDetail:
         waiting_for_input=session.waiting_for_input or False,
         error_message=session.error_message,
         messages=msgs,
-        has_report=session.report is not None,
+        has_report=bool(session.reports),
+        report_count=len(session.reports),
+        report_generating=session.report_generating or False,
+        report_error=session.report_error,
     )
 
 
-def report_response(session: DiagnosisSession) -> Optional[ReportResponse]:
-    """ORM -> ReportResponse, or None if no report."""
-    if not session.report:
-        return None
+def report_response(report: Report) -> ReportResponse:
+    """ORM Report -> ReportResponse."""
     return ReportResponse(
-        session_id=session.id,
-        markdown=session.report.markdown,
-        diagnosis=_parse_json(session.report.diagnosis, {}),
-        created_at=session.report.created_at,
+        id=report.id,
+        session_id=report.session_id,
+        markdown=report.markdown,
+        diagnosis=_parse_json(report.diagnosis, {}),
+        created_at=report.created_at,
     )

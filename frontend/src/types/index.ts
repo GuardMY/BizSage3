@@ -49,6 +49,9 @@ export interface SessionDetail extends SessionSummary {
   error_message: string | null;
   messages: Message[];
   has_report: boolean;
+  report_count: number;
+  report_generating: boolean;
+  report_error: string | null;
 }
 
 // ─── Message Request ───────────────────────────────────────────────────
@@ -56,16 +59,22 @@ export interface SessionDetail extends SessionSummary {
 export interface MessageRequest {
   client_message_id: string;
   content: string;
-  action?: "reply" | "diagnose_with_current_data";
+  action?: "reply";
 }
 
 // ─── Report Response ───────────────────────────────────────────────────
 
 export interface ReportResponse {
+  id: string;
   session_id: string;
   markdown: string;
   diagnosis: Record<string, unknown>;
   created_at: string;
+}
+
+export interface ReportGenerationResponse {
+  session_id: string;
+  status: "generating";
 }
 
 // ─── Meta ──────────────────────────────────────────────────────────────
@@ -154,7 +163,7 @@ export type DiagnosisStage =
 
 export interface DiagnosisState {
   session: SessionDetail | null;
-  report: ReportResponse | null;
+  reports: ReportResponse[];
   loading: boolean;
   generating: boolean;
   streaming: boolean;
@@ -176,7 +185,7 @@ export type DiagnosisAction =
   | { type: "SEND_REPORT_READY" }
   | { type: "SEND_DONE" }
   | { type: "SEND_ERROR"; payload: { error: string } }
-  | { type: "SET_REPORT"; payload: { report: ReportResponse } }
+  | { type: "SET_REPORTS"; payload: { reports: ReportResponse[] } }
   | { type: "SET_ERROR"; payload: { error: string } }
   | { type: "RESET" };
 

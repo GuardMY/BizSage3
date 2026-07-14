@@ -87,6 +87,7 @@ START → scene_recognize（场景识别）
 
 - **人机交互暂停** — 使用 LangGraph `interrupt()` 在信息收集与报告生成之间暂停，等待用户回复或确认
 - **并发控制** — 基于 `asyncio.Lock` 的 per-session 锁防止同一会话重复提交
+- **后台报告** — 报告生成独立于对话请求执行；单会话同时只允许一个任务，历史报告全部保留
 - **幂等性保证** — 通过 `client_message_id` 唯一约束防止消息重复处理
 - **状态持久化** — LangGraph Checkpoint 将图状态写入 SQLite，支持断线恢复和重放
 
@@ -111,6 +112,9 @@ pip install -e ".[dev]"
 cp .env.example .env
 # 编辑 .env 填入 OPENAI_API_KEY
 
+# 升级数据库结构
+alembic upgrade head
+
 # 启动服务 (http://localhost:8000)
 uvicorn app.main:app --reload
 ```
@@ -134,8 +138,10 @@ npm run dev
 | `GET` | `/api/v1/sessions/{id}` | 获取会话详情 |
 | `DELETE` | `/api/v1/sessions/{id}` | 删除会话 |
 | `POST` | `/api/v1/sessions/{id}/messages` | 发送消息 / 触发诊断 |
-| `GET` | `/api/v1/sessions/{id}/report` | 获取诊断报告 |
-| `GET` | `/api/v1/sessions/{id}/report/download` | 下载 Markdown 报告 |
+| `POST` | `/api/v1/sessions/{id}/reports` | 后台生成诊断报告；已有任务时返回 409 |
+| `GET` | `/api/v1/sessions/{id}/reports` | 倒序获取全部诊断报告 |
+| `GET` | `/api/v1/sessions/{id}/reports/{report_id}` | 获取指定诊断报告 |
+| `GET` | `/api/v1/sessions/{id}/reports/{report_id}/download` | 下载指定 Markdown 报告 |
 
 ## 配置项
 

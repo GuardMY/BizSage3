@@ -14,7 +14,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 interface ChatInputProps {
-  onSend: (content: string, action?: "reply" | "diagnose_with_current_data") => void;
+  onSend: (content: string) => void;
   disabled: boolean;
 }
 
@@ -40,7 +40,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
     if (!trimmed || disabled) return;
-    onSend(trimmed, "reply");
+    onSend(trimmed);
     setText("");
   }, [text, disabled, onSend]);
 

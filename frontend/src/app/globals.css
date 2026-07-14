@@ -94,6 +94,149 @@ body {
   border-bottom-left-radius: 0.25rem;
 }
 
+/* ── Agent Markdown ─────────────────────────────────────────────────── */
+
+.agent-markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.65;
+}
+
+.agent-markdown > :first-child {
+  margin-top: 0;
+}
+
+.agent-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.agent-markdown h1,
+.agent-markdown h2,
+.agent-markdown h3,
+.agent-markdown h4 {
+  margin: 0.8rem 0 0.35rem;
+  color: #111827;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.agent-markdown h1 {
+  font-size: 1.05rem;
+}
+
+.agent-markdown h2 {
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 0.25rem;
+  font-size: 1rem;
+}
+
+.agent-markdown h3,
+.agent-markdown h4 {
+  font-size: 0.925rem;
+}
+
+.agent-markdown p {
+  margin: 0.35rem 0;
+}
+
+.agent-markdown ul,
+.agent-markdown ol {
+  margin: 0.4rem 0;
+  padding-left: 1.35rem;
+}
+
+.agent-markdown ul {
+  list-style: disc;
+}
+
+.agent-markdown ol {
+  list-style: decimal;
+}
+
+.agent-markdown li {
+  margin: 0.2rem 0;
+  padding-left: 0.1rem;
+}
+
+.agent-markdown li > p {
+  margin: 0;
+}
+
+.agent-markdown .contains-task-list {
+  list-style: none;
+  padding-left: 0;
+}
+
+.agent-markdown input[type="checkbox"] {
+  margin-right: 0.4rem;
+  accent-color: #4f46e5;
+}
+
+.agent-markdown blockquote {
+  margin: 0.6rem 0;
+  border-left: 3px solid #a5b4fc;
+  padding: 0.25rem 0 0.25rem 0.75rem;
+  color: #4b5563;
+}
+
+.agent-markdown code {
+  border-radius: 4px;
+  background: #f3f4f6;
+  padding: 0.1rem 0.3rem;
+  color: #be123c;
+  font-size: 0.8rem;
+}
+
+.agent-markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: 6px;
+  background: #111827;
+  padding: 0.75rem;
+  color: #f9fafb;
+}
+
+.agent-markdown pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+.agent-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.65rem 0;
+  font-size: 0.8rem;
+}
+
+.agent-markdown th,
+.agent-markdown td {
+  min-width: 6rem;
+  border: 1px solid #d1d5db;
+  padding: 0.4rem 0.55rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.agent-markdown th {
+  background: #f3f4f6;
+  font-weight: 600;
+}
+
+.agent-markdown a {
+  color: #2563eb;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.agent-markdown hr {
+  margin: 0.8rem 0;
+  border: 0;
+  border-top: 1px solid #e5e7eb;
+}
+
 /* ── Scrollbar ───────────────────────────────────────────────────────── */
 
 ::-webkit-scrollbar {

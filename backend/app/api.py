@@ -20,10 +20,12 @@ from app.api_schemas import (
     SessionDetail,
     MessageRequest,
     ReportResponse,
+    ReportGenerationResponse,
 )
 from app.serializers import session_summary, session_detail, report_response
 from app.repository import SessionRepository
 from app.services.workflow import workflow_manager
+from app.services.report_service import ReportContext, report_task_manager
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +101,7 @@ async def get_session(session_id: str, db: AsyncSession = Depends(get_db_session
 async def delete_session(session_id: str, db: AsyncSession = Depends(get_db_session)):
     """Delete a session and all its data."""
     repo = SessionRepository(db)
+    await report_task_manager.cancel(session_id)
     deleted = await repo.delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -132,8 +135,15 @@ async def chat_message(
     This is the core conversational endpoint. It can:
     - Start a new workflow if this is the first message
     - Resume a paused workflow after user reply
-    - Force diagnosis with current data (action=diagnose_with_current_data)
+
+    Report generation uses the dedicated background reports endpoint.
     """
+    if body.action == "diagnose_with_current_data":
+        raise HTTPException(
+            status_code=400,
+            detail="诊断报告已改为后台生成，请使用 POST /sessions/{id}/reports",
+        )
+
     repo = SessionRepository(db)
 
     # 1. Load session
@@ -288,35 +298,120 @@ async def _emit_result(repo: SessionRepository, session, result: dict):
 # Reports
 # =============================================================================
 
-@router.get("/sessions/{session_id}/report", response_model=ReportResponse)
-async def get_report(session_id: str, db: AsyncSession = Depends(get_db_session)):
-    """Get the diagnosis report for a session."""
+@router.post(
+    "/sessions/{session_id}/reports",
+    response_model=ReportGenerationResponse,
+    status_code=202,
+)
+async def start_report_generation(
+    session_id: str,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Start one background report task from the current conversation snapshot."""
     repo = SessionRepository(db)
     session = await repo.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    rpt = report_response(session)
-    if not rpt:
+    context = ReportContext.from_session(session)
+    acquired = await repo.try_start_report_generation(session_id)
+    if not acquired:
+        raise HTTPException(status_code=409, detail="该会话已有诊断报告正在生成")
+    await db.commit()
+
+    try:
+        report_task_manager.start(context)
+    except RuntimeError as exc:
+        await repo.finish_report_generation(session_id, error=str(exc))
+        await db.commit()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return ReportGenerationResponse(session_id=session_id)
+
+
+@router.get(
+    "/sessions/{session_id}/reports",
+    response_model=list[ReportResponse],
+)
+async def list_reports(
+    session_id: str,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """List all reports for a session, newest first."""
+    repo = SessionRepository(db)
+    session = await repo.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    reports = await repo.list_reports(session_id)
+    return [report_response(report) for report in reports]
+
+
+@router.get(
+    "/sessions/{session_id}/reports/{report_id}",
+    response_model=ReportResponse,
+)
+async def get_report_by_id(
+    session_id: str,
+    report_id: str,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Get one diagnosis report by ID."""
+    report = await SessionRepository(db).get_report(session_id, report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return report_response(report)
+
+
+@router.get("/sessions/{session_id}/reports/{report_id}/download")
+async def download_report_by_id(
+    session_id: str,
+    report_id: str,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Download one report as Markdown."""
+    from fastapi.responses import PlainTextResponse
+
+    report = await SessionRepository(db).get_report(session_id, report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return PlainTextResponse(
+        content=report.markdown,
+        media_type="text/markdown",
+        headers={
+            "Content-Disposition": f"attachment; filename=diagnosis-report-{report.id[:8]}.md"
+        },
+    )
+
+@router.get("/sessions/{session_id}/report", response_model=ReportResponse)
+async def get_report(session_id: str, db: AsyncSession = Depends(get_db_session)):
+    """Get the latest diagnosis report for backward compatibility."""
+    repo = SessionRepository(db)
+    session = await repo.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    reports = await repo.list_reports(session_id)
+    if not reports:
         raise HTTPException(status_code=404, detail="Report not yet generated")
-    return rpt
+    return report_response(reports[0])
 
 
 @router.get("/sessions/{session_id}/report/download")
 async def download_report(session_id: str, db: AsyncSession = Depends(get_db_session)):
-    """Download the diagnosis report as a Markdown file."""
+    """Download the latest report as Markdown for backward compatibility."""
     from fastapi.responses import PlainTextResponse
 
     repo = SessionRepository(db)
-    session = await repo.get_session(session_id)
-    if not session or not session.report:
+    reports = await repo.list_reports(session_id)
+    if not reports:
         raise HTTPException(status_code=404, detail="Report not found")
+    report = reports[0]
 
     return PlainTextResponse(
-        content=session.report.markdown,
+        content=report.markdown,
         media_type="text/markdown",
         headers={
-            "Content-Disposition": f"attachment; filename=diagnosis-report-{session_id[:8]}.md"
+            "Content-Disposition": f"attachment; filename=diagnosis-report-{report.id[:8]}.md"
         },
     )
 

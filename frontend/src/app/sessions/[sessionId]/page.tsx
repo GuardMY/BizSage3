@@ -87,8 +87,8 @@ export default function SessionPage() {
   );
 
   const handleSend = useCallback(
-    (content: string, action?: "reply" | "diagnose_with_current_data") => {
-      diagnosis.sendMessage(content, action ?? "reply");
+    (content: string) => {
+      diagnosis.sendMessage(content);
       // Switch to chat tab when sending a message
       setActiveTab("chat");
     },
@@ -96,7 +96,7 @@ export default function SessionPage() {
   );
 
   const handleGenerateReport = useCallback(() => {
-    diagnosis.sendMessage("", "diagnose_with_current_data");
+    void diagnosis.generateReport();
   }, [diagnosis]);
 
   // ─── Derived State ────────────────────────────────────────────────────
@@ -141,15 +141,17 @@ export default function SessionPage() {
               active={activeTab === "report"}
               onClick={() => {
                 setActiveTab("report");
-                if (diagnosis.hasReport || diagnosis.session?.has_report) {
-                  diagnosis.loadReport();
-                }
+                void diagnosis.loadReports();
               }}
               loading={diagnosis.reportLoading || diagnosis.loading}
             >
               诊断报告
-              {diagnosis.hasReport ? (
-                <span className="ml-1.5 inline-flex h-2 w-2 rounded-full bg-green-400" />
+              {(diagnosis.session?.report_count ?? 0) > 0 ? (
+                <span className="ml-1.5 text-xs text-gray-400">
+                  {diagnosis.session?.report_count}
+                </span>
+              ) : diagnosis.reportGenerating ? (
+                <span className="ml-1.5 inline-flex h-2 w-2 animate-pulse rounded-full bg-amber-400" />
               ) : (diagnosis.reportLoading || diagnosis.loading) ? (
                 /* Reserve dot space during load to prevent layout shift */
                 <span className="ml-1.5 inline-flex h-2 w-2 rounded-full invisible" />
@@ -178,8 +180,9 @@ export default function SessionPage() {
               /* Report workspace */
               <ReportView
                 sessionId={sessionId ?? ""}
-                report={diagnosis.report}
+                reports={diagnosis.reports}
                 loading={diagnosis.reportLoading}
+                generating={diagnosis.reportGenerating}
               />
             )}
           </div>
@@ -191,7 +194,8 @@ export default function SessionPage() {
             score={progressScore}
             completeness={diagnosis.completeness}
             stage={diagnosis.session?.stage ?? ""}
-            canGenerateReport={!diagnosis.streaming}
+            canGenerateReport={!diagnosis.streaming && !diagnosis.reportGenerating}
+            reportGenerating={diagnosis.reportGenerating}
             onGenerateReport={handleGenerateReport}
           />
         </div>

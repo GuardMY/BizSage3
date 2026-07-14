@@ -17,6 +17,7 @@ from app.db import engine
 from app.models import Base
 from app.api import router as api_router
 from app.services.workflow import workflow_manager
+from app.services.report_service import report_task_manager
 
 
 @asynccontextmanager
@@ -29,10 +30,12 @@ async def lifespan(app: FastAPI):
 
     # Start the workflow manager (initializes checkpointer + graph)
     await workflow_manager.startup()
+    await report_task_manager.startup()
 
     yield
 
     # Cleanup
+    await report_task_manager.shutdown()
     await workflow_manager.shutdown()
     await engine.dispose()
 

@@ -10,23 +10,46 @@
  *   - Severity badges for diagnosis findings
  * ============================================================================= */
 
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import type { ReportResponse } from "@/types";
 import { getReportDownloadUrl } from "@/lib/api";
 
 interface ReportViewProps {
   sessionId: string;
-  report: ReportResponse | null;
+  reports: ReportResponse[];
   loading: boolean;
+  generating: boolean;
 }
 
-export default function ReportView({ sessionId, report, loading }: ReportViewProps) {
-  // Extract severity badges from markdown content
-  const severityMap = useMemo(() => extractSeverities(report?.markdown ?? ""), [report]);
+export default function ReportView({
+  sessionId,
+  reports,
+  loading,
+  generating,
+}: ReportViewProps) {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const orderedReports = useMemo(
+    () => [...reports].sort((a, b) => b.created_at.localeCompare(a.created_at)),
+    [reports],
+  );
+  const selectedReport =
+    orderedReports.find((report) => report.id === selectedId) ?? orderedReports[0] ?? null;
+  const severityMap = useMemo(
+    () => extractSeverities(selectedReport?.markdown ?? ""),
+    [selectedReport],
+  );
+
+  useEffect(() => {
+    if (orderedReports.length === 0) {
+      setSelectedId(null);
+    } else if (!orderedReports.some((report) => report.id === selectedId)) {
+      setSelectedId(orderedReports[0].id);
+    }
+  }, [orderedReports, selectedId]);
 
   // --- Loading ---
-  if (loading) {
+  if (loading && orderedReports.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center bg-white">
         <div className="flex flex-col items-center gap-3">
@@ -42,7 +65,7 @@ export default function ReportView({ sessionId, report, loading }: ReportViewPro
   }
 
   // --- Empty ---
-  if (!report) {
+  if (!selectedReport) {
     return (
       <div className="flex flex-1 items-center justify-center bg-white">
         <div className="max-w-sm text-center">
@@ -59,8 +82,12 @@ export default function ReportView({ sessionId, report, loading }: ReportViewPro
               d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"
             />
           </svg>
-          <p className="mt-3 text-sm text-gray-500">暂无诊断报告</p>
-          <p className="mt-1 text-xs text-gray-400">请先完成数据采集，AI 将自动生成诊断报告</p>
+          <p className="mt-3 text-sm text-gray-500">
+            {generating ? "诊断报告正在后台生成" : "暂无诊断报告"}
+          </p>
+          <p className="mt-1 text-xs text-gray-400">
+            {generating ? "生成期间可以继续对话" : "可从右侧诊断进度中生成报告"}
+          </p>
         </div>
       </div>
     );
@@ -70,7 +97,13 @@ export default function ReportView({ sessionId, report, loading }: ReportViewPro
     <div className="flex flex-1 flex-col bg-white">
       {/* Toolbar */}
       <div className="flex items-center justify-between border-b border-gray-200 px-6 py-3">
-        <h2 className="text-base font-semibold text-gray-800">诊断报告</h2>
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-gray-800">诊断报告</h2>
+          <p className="mt-0.5 text-xs text-gray-400">
+            {formatReportDate(selectedReport.created_at)}
+            {generating && <span className="ml-2 text-amber-600">新报告生成中</span>}
+          </p>
+        </div>
         <div className="flex items-center gap-2">
           {/* Severity legend */}
           <div className="hidden items-center gap-2 text-xs sm:flex">
@@ -84,7 +117,7 @@ export default function ReportView({ sessionId, report, loading }: ReportViewPro
 
           {/* Download button */}
           <a
-            href={getReportDownloadUrl(sessionId)}
+            href={getReportDownloadUrl(sessionId, selectedReport.id)}
             download
             className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-500"
           >
@@ -100,36 +133,78 @@ export default function ReportView({ sessionId, report, loading }: ReportViewPro
         </div>
       </div>
 
-      {/* Report content */}
-      <div className="flex-1 overflow-y-auto print:overflow-visible">
-        <div className="mx-auto max-w-3xl px-6 py-8 print:px-0 print:py-4">
-          <div className="prose prose-sm max-w-none prose-headings:font-semibold prose-h2:text-lg prose-h2:text-gray-800 prose-h3:text-base prose-h3:text-gray-700 prose-h4:text-sm prose-p:text-gray-600 prose-p:leading-relaxed prose-ul:text-gray-600 prose-ol:text-gray-600 prose-li:my-0.5 prose-strong:text-gray-800 prose-a:text-indigo-600 prose-code:rounded prose-code:bg-gray-100 prose-code:px-1 prose-code:text-sm prose-blockquote:border-l-indigo-300 prose-blockquote:text-gray-500 prose-pre:bg-gray-900 prose-pre:text-gray-100">
-            <ReactMarkdown
-              components={{
-                // Inject severity badges into the rendered content
-                p: ({ children, ...props }) => {
-                  // Check if paragraph starts with a severity keyword
-                  const text = extractText(children);
-                  const sev = severityMap[text.trim()];
-                  if (sev) {
-                    return (
-                      <p {...props} className="flex items-start gap-2">
-                        <SeverityBadge sev={sev.severity} />
-                        <span>{children}</span>
-                      </p>
-                    );
-                  }
-                  return <p {...props}>{children}</p>;
-                },
-              }}
-            >
-              {report.markdown}
-            </ReactMarkdown>
+      <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+        <aside className="w-full shrink-0 overflow-x-auto border-b border-gray-200 bg-gray-50 sm:w-56 sm:overflow-y-auto sm:border-r sm:border-b-0">
+          <div className="hidden border-b border-gray-200 px-3 py-2.5 text-xs font-medium text-gray-500 sm:block">
+            历史报告 · {orderedReports.length}
+          </div>
+          <div className="flex sm:block sm:py-1">
+            {generating && (
+              <div className="flex min-w-36 items-center gap-2 border-r border-gray-200 px-3 py-3 text-xs text-amber-700 sm:min-w-0 sm:border-r-0 sm:border-b">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+                后台生成中
+              </div>
+            )}
+            {orderedReports.map((report, index) => (
+              <button
+                key={report.id}
+                type="button"
+                onClick={() => setSelectedId(report.id)}
+                className={`min-w-40 border-r border-gray-200 px-3 py-3 text-left transition-colors sm:w-full sm:min-w-0 sm:border-r-0 sm:border-b ${
+                  report.id === selectedReport.id
+                    ? "bg-white text-gray-900"
+                    : "text-gray-600 hover:bg-white"
+                }`}
+              >
+                <span className="block text-sm font-medium">
+                  {index === 0 ? "最新报告" : `历史报告 ${orderedReports.length - index}`}
+                </span>
+                <span className="mt-1 block text-xs text-gray-400">
+                  {formatReportDate(report.created_at)}
+                </span>
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        <div className="flex-1 overflow-y-auto print:overflow-visible">
+          <div className="mx-auto max-w-3xl px-6 py-8 print:px-0 print:py-4">
+            <div className="report-content">
+              <ReactMarkdown
+                components={{
+                  p: ({ children, ...props }) => {
+                    const text = extractText(children);
+                    const sev = severityMap[text.trim()];
+                    if (sev) {
+                      return (
+                        <p {...props} className="flex items-start gap-2">
+                          <SeverityBadge sev={sev.severity} />
+                          <span>{children}</span>
+                        </p>
+                      );
+                    }
+                    return <p {...props}>{children}</p>;
+                  },
+                }}
+              >
+                {selectedReport.markdown}
+              </ReactMarkdown>
+            </div>
           </div>
         </div>
       </div>
     </div>
   );
+}
+
+function formatReportDate(iso: string): string {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(iso));
 }
 
 // ---------------------------------------------------------------------------

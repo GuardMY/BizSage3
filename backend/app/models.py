@@ -44,14 +44,20 @@ class DiagnosisSession(Base):
     waiting_for_input = Column(Boolean, nullable=False, default=False)
     force_diagnosis = Column(Boolean, nullable=False, default=False)
     limited_diagnosis = Column(Boolean, nullable=False, default=False)
+    report_generating = Column(Boolean, nullable=False, default=False)
+    report_error = Column(Text, nullable=True)
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
 
     messages = relationship("Message", back_populates="session", order_by="Message.sequence",
                             cascade="all, delete-orphan")
-    report = relationship("Report", back_populates="session", uselist=False,
-                          cascade="all, delete-orphan")
+    reports = relationship(
+        "Report",
+        back_populates="session",
+        order_by="Report.created_at.desc()",
+        cascade="all, delete-orphan",
+    )
 
 
 class Message(Base):
@@ -77,10 +83,14 @@ class Report(Base):
     __tablename__ = "reports"
 
     id = Column(String, primary_key=True, default=_new_id)
-    session_id = Column(String, ForeignKey("diagnosis_sessions.id", ondelete="CASCADE"),
-                        nullable=False, unique=True)
+    session_id = Column(
+        String,
+        ForeignKey("diagnosis_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     markdown = Column(Text, nullable=False)
     diagnosis = Column(Text, nullable=False, default="{}")  # JSON
     created_at = Column(DateTime, nullable=False, default=_utcnow)
 
-    session = relationship("DiagnosisSession", back_populates="report")
+    session = relationship("DiagnosisSession", back_populates="reports")

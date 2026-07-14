@@ -50,6 +50,9 @@ class SessionDetail(SessionSummary):
     error_message: Optional[str] = None
     messages: List[MessageSchema] = Field(default_factory=list)
     has_report: bool = False
+    report_count: int = 0
+    report_generating: bool = False
+    report_error: Optional[str] = None
 
 
 # =============================================================================
@@ -60,7 +63,7 @@ class MessageRequest(BaseModel):
     """Request body for sending a message (SSE chat endpoint)."""
     client_message_id: str = Field(description="UUID for idempotency")
     content: str = Field(default="", description="User's reply text")
-    action: str = Field(default="reply", description="reply | diagnose_with_current_data")
+    action: str = Field(default="reply", description="reply (legacy report actions are rejected)")
 
 
 # =============================================================================
@@ -69,10 +72,17 @@ class MessageRequest(BaseModel):
 
 class ReportResponse(BaseModel):
     """Diagnosis report response."""
+    id: str
     session_id: str
     markdown: str
     diagnosis: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
+
+
+class ReportGenerationResponse(BaseModel):
+    """Accepted background report generation request."""
+    session_id: str
+    status: str = "generating"
 
 
 # =============================================================================

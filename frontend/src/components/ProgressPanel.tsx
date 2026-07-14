@@ -18,6 +18,7 @@ interface ProgressPanelProps {
   completeness: CompletenessDetail | null;
   stage: string;
   canGenerateReport: boolean;
+  reportGenerating: boolean;
   onGenerateReport: () => void;
 }
 
@@ -26,6 +27,7 @@ export default function ProgressPanel({
   completeness,
   stage,
   canGenerateReport,
+  reportGenerating,
   onGenerateReport,
 }: ProgressPanelProps) {
   const stageLabel = stageLabelForStage(stage);
@@ -112,8 +114,13 @@ export default function ProgressPanel({
             disabled={!canGenerateReport}
             className="w-full rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            生成诊断报告
+            {reportGenerating ? "报告后台生成中..." : "生成诊断报告"}
           </button>
+          {reportGenerating && (
+            <p className="mt-2 text-center text-xs text-gray-500">
+              可继续对话，完成后会自动更新
+            </p>
+          )}
         </div>
       </div>
     </aside>

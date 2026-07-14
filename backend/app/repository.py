@@ -5,7 +5,7 @@ import uuid
 from typing import Optional, List
 from datetime import datetime
 
-from sqlalchemy import select, delete, func
+from sqlalchemy import select, delete, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DiagnosisSession, Message, Report
@@ -50,14 +50,14 @@ class SessionRepository:
         return session
 
     async def get_session(self, session_id: str) -> Optional[DiagnosisSession]:
-        """Get a session by ID, including messages and report."""
+        """Get a session by ID, including messages and reports."""
         from sqlalchemy.orm import selectinload
         stmt = (
             select(DiagnosisSession)
             .where(DiagnosisSession.id == session_id)
             .options(
                 selectinload(DiagnosisSession.messages),
-                selectinload(DiagnosisSession.report),
+                selectinload(DiagnosisSession.reports),
             )
         )
         result = await self.db.execute(stmt)
@@ -198,24 +198,80 @@ class SessionRepository:
         markdown: str,
         diagnosis: dict,
     ) -> Report:
-        """Create or update the report for a session."""
-        # Check if report already exists
-        stmt = select(Report).where(Report.session_id == session_id)
-        result = await self.db.execute(stmt)
-        report = result.scalars().first()
-
-        if report:
-            report.markdown = markdown
-            report.diagnosis = json.dumps(diagnosis, ensure_ascii=False)
-            report.created_at = _utcnow()
-        else:
-            report = Report(
-                id=_new_id(),
-                session_id=session_id,
-                markdown=markdown,
-                diagnosis=json.dumps(diagnosis, ensure_ascii=False),
-            )
-            self.db.add(report)
+        """Create a new immutable report for a session."""
+        report = Report(
+            id=_new_id(),
+            session_id=session_id,
+            markdown=markdown,
+            diagnosis=json.dumps(diagnosis, ensure_ascii=False),
+        )
+        self.db.add(report)
 
         await self.db.flush()
         return report
+
+    async def list_reports(self, session_id: str) -> List[Report]:
+        """List reports for a session, newest first."""
+        stmt = (
+            select(Report)
+            .where(Report.session_id == session_id)
+            .order_by(Report.created_at.desc(), Report.id.desc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_report(self, session_id: str, report_id: str) -> Optional[Report]:
+        """Get one report while enforcing session ownership."""
+        stmt = select(Report).where(
+            Report.id == report_id,
+            Report.session_id == session_id,
+        )
+        result = await self.db.execute(stmt)
+        return result.scalars().first()
+
+    async def try_start_report_generation(self, session_id: str) -> bool:
+        """Atomically acquire the single report-generation slot for a session."""
+        stmt = (
+            update(DiagnosisSession)
+            .where(
+                DiagnosisSession.id == session_id,
+                DiagnosisSession.report_generating.is_(False),
+            )
+            .values(report_generating=True, report_error=None)
+        )
+        result = await self.db.execute(stmt)
+        await self.db.flush()
+        return result.rowcount == 1
+
+    async def finish_report_generation(
+        self,
+        session_id: str,
+        *,
+        error: Optional[str] = None,
+    ) -> None:
+        """Release a session's report-generation slot and persist its outcome."""
+        values = {
+            "report_generating": False,
+            "report_error": error,
+            "updated_at": _utcnow(),
+        }
+        if error is None:
+            values["status"] = "completed"
+        await self.db.execute(
+            update(DiagnosisSession)
+            .where(DiagnosisSession.id == session_id)
+            .values(**values)
+        )
+        await self.db.flush()
+
+    async def reset_running_report_generations(self) -> None:
+        """Release tasks left marked running after a process restart."""
+        await self.db.execute(
+            update(DiagnosisSession)
+            .where(DiagnosisSession.report_generating.is_(True))
+            .values(
+                report_generating=False,
+                report_error="报告生成因服务重启而中断，请重新生成",
+            )
+        )
+        await self.db.flush()

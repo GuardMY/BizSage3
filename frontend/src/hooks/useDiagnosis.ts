@@ -27,15 +27,14 @@ export interface UseDiagnosisReturn {
   loading: boolean;
   error: string | null;
   hasReport: boolean;
-  report: ReportResponse | null;
+  reports: ReportResponse[];
   reportLoading: boolean;
+  reportGenerating: boolean;
 
   loadSession: (id: string) => Promise<void>;
-  sendMessage: (
-    content: string,
-    action?: "reply" | "diagnose_with_current_data",
-  ) => void;
-  loadReport: () => Promise<void>;
+  sendMessage: (content: string) => void;
+  loadReports: () => Promise<void>;
+  generateReport: () => Promise<void>;
   clearError: () => void;
   reset: () => void;
 }
@@ -50,8 +49,9 @@ export function useDiagnosis(): UseDiagnosisReturn {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasReport, setHasReport] = useState(false);
-  const [report, setReport] = useState<ReportResponse | null>(null);
+  const [reports, setReports] = useState<ReportResponse[]>([]);
   const [reportLoading, setReportLoading] = useState(false);
+  const [reportGenerating, setReportGenerating] = useState(false);
 
   const messagesRef = useRef<Message[]>([]);
   const mounted = useRef(true);
@@ -82,8 +82,9 @@ export function useDiagnosis(): UseDiagnosisReturn {
     setLoading(false);
     setError(null);
     setHasReport(false);
-    setReport(null);
+    setReports([]);
     setReportLoading(false);
+    setReportGenerating(false);
     currentSessionId.current = null;
   }, []);
 
@@ -97,7 +98,7 @@ export function useDiagnosis(): UseDiagnosisReturn {
     try {
       setLoading(true);
       setError(null);
-      setReport(null);
+      setReports([]);
       setReportLoading(false);
       const detail = await api.getSession(id);
       if (!mounted.current || currentSessionId.current !== id) return;
@@ -105,6 +106,8 @@ export function useDiagnosis(): UseDiagnosisReturn {
       setMessages(detail.messages ?? []);
       setCompleteness(detail.completeness ?? null);
       setHasReport(detail.has_report ?? false);
+      setReportGenerating(detail.report_generating ?? false);
+      if (detail.report_error) setError(detail.report_error);
       setStageLabel(stageLabelForStage(detail.stage));
     } catch (err) {
       if (mounted.current)
@@ -119,10 +122,7 @@ export function useDiagnosis(): UseDiagnosisReturn {
   // -----------------------------------------------------------------------
 
   const sendMessage = useCallback(
-    (
-      content: string,
-      action: "reply" | "diagnose_with_current_data" = "reply",
-    ) => {
+    (content: string) => {
       const sid = currentSessionId.current;
       if (!sid) return;
 
@@ -147,7 +147,7 @@ export function useDiagnosis(): UseDiagnosisReturn {
       const payload: MessageRequest = {
         client_message_id: clientMessageId,
         content,
-        action,
+        action: "reply",
       };
 
       api
@@ -194,6 +194,7 @@ export function useDiagnosis(): UseDiagnosisReturn {
                 }
                 setCompleteness(data.completeness ?? null);
                 setHasReport(data.has_report ?? false);
+                setReportGenerating(data.report_generating ?? false);
                 setStageLabel(stageLabelForStage(data.stage));
                 setStreamText("");
                 break;
@@ -233,18 +234,18 @@ export function useDiagnosis(): UseDiagnosisReturn {
   );
 
   // -----------------------------------------------------------------------
-  // Load report
+  // Load report history
   // -----------------------------------------------------------------------
 
-  const loadReport = useCallback(async () => {
+  const loadReports = useCallback(async () => {
     const sid = currentSessionId.current;
     if (!sid) return;
     try {
       setReportLoading(true);
-      const r = await api.getReport(sid);
+      const result = await api.getReports(sid);
       if (mounted.current) {
-        setReport(r);
-        setHasReport(true);
+        setReports(result);
+        setHasReport(result.length > 0);
       }
     } catch (err) {
       if (mounted.current)
@@ -253,6 +254,69 @@ export function useDiagnosis(): UseDiagnosisReturn {
       if (mounted.current) setReportLoading(false);
     }
   }, []);
+
+  const generateReport = useCallback(async () => {
+    const sid = currentSessionId.current;
+    if (!sid || reportGenerating) return;
+
+    setError(null);
+    setReportGenerating(true);
+    setStageLabel("诊断报告正在后台生成...");
+    try {
+      await api.startReportGeneration(sid);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "启动报告生成失败";
+      if (!mounted.current) return;
+      setError(message);
+      try {
+        const detail = await api.getSession(sid);
+        if (currentSessionId.current === sid) {
+          setSession(detail);
+          setReportGenerating(detail.report_generating ?? false);
+          setStageLabel(stageLabelForStage(detail.stage));
+        }
+      } catch {
+        setReportGenerating(false);
+      }
+    }
+  }, [reportGenerating]);
+
+  useEffect(() => {
+    const sid = currentSessionId.current;
+    if (!sid || !reportGenerating) return;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      try {
+        const detail = await api.getSession(sid);
+        if (cancelled || currentSessionId.current !== sid) return;
+        setSession(detail);
+        setHasReport(detail.has_report ?? false);
+        setReportGenerating(detail.report_generating ?? false);
+
+        if (detail.report_generating) {
+          timer = setTimeout(poll, 1500);
+          return;
+        }
+
+        setStageLabel(stageLabelForStage(detail.stage));
+        if (detail.report_error) setError(detail.report_error);
+        await loadReports();
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "获取报告生成状态失败");
+        timer = setTimeout(poll, 3000);
+      }
+    };
+
+    timer = setTimeout(poll, 800);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [reportGenerating, loadReports]);
 
   // -----------------------------------------------------------------------
   // Clear error
@@ -270,11 +334,13 @@ export function useDiagnosis(): UseDiagnosisReturn {
     loading,
     error,
     hasReport,
-    report,
+    reports,
     reportLoading,
+    reportGenerating,
     loadSession,
     sendMessage,
-    loadReport,
+    loadReports,
+    generateReport,
     clearError,
     reset,
   };

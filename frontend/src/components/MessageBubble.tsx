@@ -6,6 +6,7 @@
 
 import React from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { Message } from "@/types";
 
 interface MessageBubbleProps {
@@ -33,22 +34,38 @@ export default function MessageBubble({ message, isStreaming }: MessageBubblePro
       </div>
 
       {/* Bubble */}
-      <div className={`flex flex-col ${isUser ? "items-end" : "items-start"} max-w-[75%]`}>
+      <div className={`flex max-w-[85%] flex-col ${isUser ? "items-end" : "items-start"}`}>
         <div
           className={`
             rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm
             ${
               isUser
-                ? "bg-gradient-to-br from-indigo-500 to-purple-600 text-white rounded-tr-md"
-                : "bg-gray-100 text-gray-800 rounded-tl-md"
+                ? "bg-indigo-600 text-white rounded-tr-md"
+                : "border border-gray-200 bg-white text-gray-800 rounded-tl-md"
             }
           `}
         >
           {isUser ? (
             <p className="whitespace-pre-wrap break-words">{message.content}</p>
           ) : (
-            <div className="prose prose-sm max-w-none prose-p:leading-relaxed prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-headings:my-2 prose-h3:text-base prose-h4:text-sm prose-code:bg-gray-200 prose-code:px-1 prose-code:rounded prose-code:text-sm prose-a:text-blue-600 prose-strong:font-semibold prose-blockquote:border-l-gray-300 prose-blockquote:text-gray-500">
-              <ReactMarkdown>{message.content}</ReactMarkdown>
+            <div className="agent-markdown">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ href, children, ...props }) => (
+                    <a
+                      {...props}
+                      href={href}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                    >
+                      {children}
+                    </a>
+                  ),
+                }}
+              >
+                {message.content}
+              </ReactMarkdown>
             </div>
           )}
 
