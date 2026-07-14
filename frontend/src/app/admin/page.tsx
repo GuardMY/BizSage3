@@ -37,6 +37,7 @@ export default function AdminPage() {
   const [expiresInHours, setExpiresInHours] = useState(24);
   const [createdToken, setCreatedToken] = useState<CreatedTemporaryAccessToken | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,6 +88,7 @@ export default function AdminPage() {
       setTokens((current) => [created, ...current]);
       setName("");
       setCopied(false);
+      setCopyError(null);
     } catch (err) {
       setError(readableError(err));
     } finally {
@@ -96,8 +98,14 @@ export default function AdminPage() {
 
   async function handleCopy() {
     if (!createdToken) return;
-    await navigator.clipboard.writeText(createdToken.token);
-    setCopied(true);
+    setCopyError(null);
+    try {
+      await copyToClipboard(createdToken.token);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+      setCopyError("复制失败，请手动选择上方令牌进行复制");
+    }
   }
 
   async function handleRevoke(token: TemporaryAccessToken) {
@@ -204,14 +212,23 @@ export default function AdminPage() {
                     {createdToken.token}
                   </code>
                   <button
+                    type="button"
                     onClick={() => void handleCopy()}
-                    title="复制令牌"
-                    aria-label="复制令牌"
+                    title={copied ? "已复制" : "复制令牌"}
+                    aria-label={copied ? "令牌已复制" : "复制令牌"}
                     className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-emerald-700 text-white hover:bg-emerald-800"
                   >
                     {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                   </button>
                 </div>
+                {(copyError || copied) && (
+                  <p
+                    role="status"
+                    className={`mt-2 text-xs ${copyError ? "text-red-700" : "text-emerald-800"}`}
+                  >
+                    {copyError ?? "已复制到剪贴板"}
+                  </p>
+                )}
               </div>
             </div>
           </section>
@@ -310,4 +327,35 @@ function readableError(error: unknown): string {
   if (!(error instanceof Error)) return "操作失败，请稍后重试";
   const marker = error.message.indexOf(": ");
   return marker >= 0 ? error.message.slice(marker + 2) : error.message;
+}
+
+async function copyToClipboard(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Clipboard API can be denied outside a secure context; fall back below.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+
+  let succeeded = false;
+  try {
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    succeeded = document.execCommand("copy");
+  } finally {
+    textarea.remove();
+  }
+
+  if (!succeeded) throw new Error("Clipboard access is unavailable");
 }
