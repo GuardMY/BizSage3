@@ -2,6 +2,8 @@ services:
   backend:
     build:
       context: ./backend
+      args:
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
     env_file:
       - ./backend/.env
     environment:
@@ -19,6 +21,7 @@ services:
       context: ./frontend
       args:
         BACKEND_URL: http://backend:8000
+        NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmmirror.com}"
     environment:
       BACKEND_URL: http://backend:8000
     depends_on:

@@ -115,6 +115,17 @@ Compose 内部网络中将 `/api/*` 请求转发到后端。后端启动时会�
 APP_PORT=8080
 ```
 
+镜像构建默认使用清华 PyPI 和 npmmirror。如需切换到其他镜像，可在项目根目录的
+`.env` 中覆盖：
+
+```dotenv
+PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+NPM_REGISTRY=https://registry.npmmirror.com
+```
+
+Dockerfile 使用 BuildKit 缓存复用 pip、npm 和 Next.js 编译产物。日常更新直接执行
+`docker compose up -d --build` 即可；不要常规添加 `--no-cache`，否则会跳过这些缓存。
+
 常用运维命令：
 
 ```bash

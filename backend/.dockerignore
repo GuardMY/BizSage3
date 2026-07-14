@@ -6,4 +6,6 @@ __pycache__/
 *.db-shm
 *.db-wal
 *.egg-info/
+build/
+dist/
 tests/

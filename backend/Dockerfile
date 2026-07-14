@@ -1,8 +1,14 @@
-FROM python:3.12-slim
+# syntax=docker/dockerfile:1.7
+
+FROM python:3.12.12-slim-bookworm
+
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PYTHONPATH=/app
 
 WORKDIR /app
 
@@ -12,11 +18,13 @@ RUN groupadd --system --gid 1001 bizsage \
     && chown bizsage:bizsage /data
 
 COPY pyproject.toml ./
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -c "import subprocess, sys, tomllib; config = tomllib.load(open('pyproject.toml', 'rb')); subprocess.check_call([sys.executable, '-m', 'pip', 'install', *config['project']['dependencies']])"
+
 COPY app ./app
 COPY alembic.ini ./
 COPY alembic ./alembic
-
-RUN pip install --no-cache-dir .
 
 USER bizsage
 
