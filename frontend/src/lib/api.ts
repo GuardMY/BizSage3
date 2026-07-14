@@ -98,6 +98,14 @@ export async function createTemporaryToken(
 
 export async function revokeTemporaryToken(id: string): Promise<void> {
   const res = await request(
+    `${apiBase()}/admin/tokens/${encodeURIComponent(id)}/revoke`,
+    { method: "POST" },
+  );
+  return handleResponse<void>(res);
+}
+
+export async function deleteTemporaryToken(id: string): Promise<void> {
+  const res = await request(
     `${apiBase()}/admin/tokens/${encodeURIComponent(id)}`,
     { method: "DELETE" },
   );

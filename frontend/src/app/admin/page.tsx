@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
+  Ban,
   Check,
   Clock3,
   Copy,
@@ -40,6 +41,7 @@ export default function AdminPage() {
   const [copyError, setCopyError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [processingTokenId, setProcessingTokenId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadTokens = useCallback(async () => {
@@ -109,13 +111,33 @@ export default function AdminPage() {
   }
 
   async function handleRevoke(token: TemporaryAccessToken) {
-    if (!window.confirm(`确认撤销“${token.name}”吗？现有登录会立即失效。`)) return;
+    const warning = token.status === "active"
+      ? "现有登录会立即失效，撤销后可永久删除。"
+      : "撤销后可永久删除。";
+    if (!window.confirm(`确认撤销“${token.name}”吗？${warning}`)) return;
+    setProcessingTokenId(token.id);
     setError(null);
     try {
       await api.revokeTemporaryToken(token.id);
       await loadTokens();
     } catch (err) {
       setError(readableError(err));
+    } finally {
+      setProcessingTokenId(null);
+    }
+  }
+
+  async function handleDelete(token: TemporaryAccessToken) {
+    if (!window.confirm(`永久删除“${token.name}”吗？此操作无法恢复。`)) return;
+    setProcessingTokenId(token.id);
+    setError(null);
+    try {
+      await api.deleteTemporaryToken(token.id);
+      await loadTokens();
+    } catch (err) {
+      setError(readableError(err));
+    } finally {
+      setProcessingTokenId(null);
     }
   }
 
@@ -280,13 +302,23 @@ export default function AdminPage() {
                     </div>
                     <StatusBadge status={token.status} />
                     <button
-                      onClick={() => void handleRevoke(token)}
-                      disabled={token.status !== "active"}
-                      title="撤销令牌"
-                      aria-label={`撤销 ${token.name}`}
-                      className="flex h-9 w-9 items-center justify-center rounded-md text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-30"
+                      onClick={() => void (
+                        token.status === "revoked"
+                          ? handleDelete(token)
+                          : handleRevoke(token)
+                      )}
+                      disabled={processingTokenId === token.id}
+                      title={token.status === "revoked" ? "永久删除令牌" : "撤销令牌"}
+                      aria-label={`${token.status === "revoked" ? "永久删除" : "撤销"} ${token.name}`}
+                      className={`flex h-9 w-9 items-center justify-center rounded-md text-gray-400 disabled:cursor-not-allowed disabled:opacity-30 ${
+                        token.status === "revoked"
+                          ? "hover:bg-red-50 hover:text-red-600"
+                          : "hover:bg-amber-50 hover:text-amber-600"
+                      }`}
                     >
-                      <Trash2 className="h-4 w-4" />
+                      {token.status === "revoked"
+                        ? <Trash2 className="h-4 w-4" />
+                        : <Ban className="h-4 w-4" />}
                     </button>
                   </li>
                 ))}

@@ -74,7 +74,7 @@ async def test_admin_can_create_a_hashed_temporary_token(auth_test_app):
 
 
 @pytest.mark.asyncio
-async def test_revoking_token_invalidates_an_existing_session(auth_test_app):
+async def test_token_must_be_revoked_before_deletion(auth_test_app):
     app, _ = auth_test_app
     transport = ASGITransport(app=app)
 
@@ -95,12 +95,38 @@ async def test_revoking_token_invalidates_an_existing_session(auth_test_app):
             assert login.json()["role"] == "user"
             assert (await user.get("/protected")).status_code == 200
             assert (await user.get("/api/v1/admin/tokens")).status_code == 403
+            assert (
+                await user.post(
+                    f"/api/v1/admin/tokens/{token_data['id']}/revoke"
+                )
+            ).status_code == 403
+            assert (
+                await user.delete(f"/api/v1/admin/tokens/{token_data['id']}")
+            ).status_code == 403
 
-            revoked = await admin.delete(
+            not_revoked = await admin.delete(
                 f"/api/v1/admin/tokens/{token_data['id']}"
+            )
+            assert not_revoked.status_code == 409
+
+            revoked = await admin.post(
+                f"/api/v1/admin/tokens/{token_data['id']}/revoke"
             )
             assert revoked.status_code == 204
             assert (await user.get("/protected")).status_code == 401
+
+            listed = await admin.get("/api/v1/admin/tokens")
+            assert listed.status_code == 200
+            assert listed.json()[0]["status"] == "revoked"
+
+            deleted = await admin.delete(
+                f"/api/v1/admin/tokens/{token_data['id']}"
+            )
+            assert deleted.status_code == 204
+            assert (await admin.get("/api/v1/admin/tokens")).json() == []
+            assert (
+                await admin.delete(f"/api/v1/admin/tokens/{token_data['id']}")
+            ).status_code == 404
 
 
 @pytest.mark.asyncio
