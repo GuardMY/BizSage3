@@ -106,8 +106,9 @@ docker compose up -d --build
 docker compose ps
 ```
 
-启动完成后访问 <http://localhost:3000>。FastAPI 不直接暴露到宿主机，前端会在
-Compose 内部网络中将 `/api/*` 请求转发到后端。后端启动时会自动执行数据库迁移。
+启动完成后访问 <http://localhost:3000>。宿主机只暴露 Nginx；Nginx 将页面请求转发到
+Next.js，并在 Compose 内部网络中将 `/api/*` 请求直接转发到 FastAPI。后端启动时会自动
+执行数据库迁移。API 代理已关闭缓冲并延长读取超时，可直接承载聊天 SSE 流。
 
 默认宿主机端口为 `3000`。如需修改，可在项目根目录创建 `.env`：
 
@@ -123,7 +124,8 @@ PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 NPM_REGISTRY=https://registry.npmmirror.com
 ```
 
-Dockerfile 使用 BuildKit 缓存复用 pip、npm 和 Next.js 编译产物。日常更新直接执行
+Dockerfile 使用固定版本的生产运行时，并通过 BuildKit 缓存复用 pip、npm 和 Next.js
+编译产物。Nginx 负责 gzip、静态资源转发、安全响应头和统一健康检查。日常更新直接执行
 `docker compose up -d --build` 即可；不要常规添加 `--no-cache`，否则会跳过这些缓存。
 
 常用运维命令：
@@ -135,8 +137,8 @@ docker compose down            # 停止服务，保留数据
 ```
 
 业务数据库和 LangGraph 检查点保存在 `bizsage-data` 命名卷中。仅在确认不再需要数据时
-使用 `docker compose down -v`。HTTPS 反向代理部署时，还需在 `backend/.env` 中设置
-`AUTH_COOKIE_SECURE=true`。
+使用 `docker compose down -v`。当前 Nginx 监听 HTTP，公网部署时应在云负载均衡、CDN
+或入口网关终止 TLS；同时在 `backend/.env` 中设置 `AUTH_COOKIE_SECURE=true`。
 
 ## 本地开发
 

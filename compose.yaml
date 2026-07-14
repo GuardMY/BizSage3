@@ -27,9 +27,21 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-    ports:
-      - "${APP_PORT:-3000}:3000"
+    expose:
+      - "3000"
     init: true
+    restart: unless-stopped
+
+  nginx:
+    build:
+      context: ./nginx
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-3000}:80"
     restart: unless-stopped
 
 volumes:
