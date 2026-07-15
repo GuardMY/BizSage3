@@ -530,7 +530,7 @@ class KnowledgeRetrievalService:
         self,
         *,
         vector_index: KnowledgeVectorIndex | None = None,
-        embedder: EmbeddingService | None = None,
+        embedding_service: EmbeddingService | None = None,
         session_factory: async_sessionmaker[AsyncSession] = async_session_factory,
     ) -> None:
         self._vector_index = vector_index or KnowledgeVectorIndex()
@@ -716,7 +716,7 @@ class KnowledgeIngestionManager:
     ) -> None:
         self._storage = storage or knowledge_storage
         self._vector_index = vector_index or knowledge_vector_index
-        self._embedding_service = embedder or embedding_service
+        self._embedding_service = embedding_service or globals().get("embedding_service") or EmbeddingService()
         self._session_factory = session_factory
         self._tasks: dict[str, asyncio.Task[None]] = {}
 
@@ -853,5 +853,5 @@ knowledge_retrieval_service = KnowledgeRetrievalService(
 knowledge_ingestion_manager = KnowledgeIngestionManager(
     storage=knowledge_storage,
     vector_index=knowledge_vector_index,
-    embedder=embedding_service,
+    embedding_service=embedding_service,
 )

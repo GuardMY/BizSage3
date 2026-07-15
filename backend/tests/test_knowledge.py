@@ -100,7 +100,7 @@ async def test_ingestion_creates_reviewable_chunks(knowledge_db_factory):
     manager = KnowledgeIngestionManager(
         storage=FakeStorage("# 转化诊断\n\n菜单曝光下降时，先检查曝光到下单的漏斗。".encode()),
         vector_index=vectors,
-        embedder=FakeEmbedder(),
+        embedding_service=FakeEmbedder(),
         session_factory=knowledge_db_factory,
     )
     await manager._ingest(version_id)
