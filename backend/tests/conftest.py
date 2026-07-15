@@ -5,7 +5,7 @@ from typing import Dict, List
 
 import pytest
 
-from app.domain.schemas import Scene, CompletenessEval
+from app.domain.schemas import Scene, CompletenessEval, ConversationTurnOutput
 from app.services.model_service import DiagnosisModel
 
 
@@ -39,12 +39,13 @@ class MockDiagnosisModel(DiagnosisModel):
             "⚠️ 当前为测试模式，未连接真实 AI 服务。"
         )
 
-    async def chat_extract(
+    async def conversation_turn(
         self,
         messages: List[Dict[str, str]],
         existing_facts: List[str],
         scene: Dict[str, str],
-    ) -> tuple[List[str], CompletenessEval]:
+    ) -> ConversationTurnOutput:
+        """Merged chat_extract + agent_reply for deterministic testing."""
         user_msgs = [m for m in messages if m.get("role") == "user"]
         latest = user_msgs[-1]["content"] if user_msgs else ""
 
@@ -70,22 +71,25 @@ class MockDiagnosisModel(DiagnosisModel):
             missing_aspects=missing[:4],
             next_question=f"最近{missing[0] if missing else '经营'}情况怎么样？",
         )
-        return (new_facts, completeness)
 
-    async def agent_reply(
-        self,
-        raw_facts: List[str],
-        completeness: CompletenessEval,
-        scene: Dict[str, str],
-        messages: List[Dict[str, str]] = None,
-    ) -> str:
+        # Build conversational reply (same logic as old agent_reply)
         next_q = completeness.next_question or "还有其他方面可以聊聊吗？"
-        reply = f"了解了{'，'.join(raw_facts[-2:]) if raw_facts else ''}。"
+        all_facts = existing_facts + new_facts
+        reply = f"了解了{'，'.join(all_facts[-2:]) if all_facts else ''}。"
         if completeness.score >= 80:
             reply += "\n\n**[信息已比较充分，点击按钮即可生成诊断报告]**"
         else:
             reply += f"{next_q}"
-        return reply
+
+        # Generate quick-reply suggestions
+        suggested = [next_q[:15]] if next_q else []
+
+        return ConversationTurnOutput(
+            new_facts=new_facts,
+            completeness=completeness,
+            reply=reply,
+            suggested_replies=suggested,
+        )
 
     async def diagnose(self, raw_facts, scene) -> str:
         industry = scene.get("industry", "未知行业")

@@ -74,7 +74,25 @@ class DiagnosisResult(BaseModel):
 
 
 class AgentReplyOutput(BaseModel):
-    """Structured output of agent_reply: the reply text plus quick-reply suggestions."""
+    """Structured output of agent_reply: the reply text plus quick-reply suggestions.
+
+    Deprecated: kept for backward-compat reference. Use ConversationTurnOutput instead.
+    """
+    reply: str = Field(description="对话回复文本")
+    suggested_replies: List[str] = Field(
+        default_factory=list,
+        description="预测用户可能回复的选项（3-10个）",
+    )
+
+
+class ConversationTurnOutput(BaseModel):
+    """Merged output of chat_extract + agent_reply in a single LLM call.
+
+    One call handles: fact extraction, completeness evaluation, reply generation,
+    and quick-reply suggestions.
+    """
+    new_facts: List[str] = Field(default_factory=list, description="新提取的运营事实")
+    completeness: CompletenessEval = Field(default_factory=CompletenessEval, description="信息完备度评估")
     reply: str = Field(description="对话回复文本")
     suggested_replies: List[str] = Field(
         default_factory=list,

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.domain.schemas import ChatExtractOutput, CompletenessEval, Scene
+from app.domain.schemas import CompletenessEval, Scene, ConversationTurnOutput
 from app.services.model_service import OpenAICompatibleModel
 
 
@@ -35,31 +35,32 @@ async def test_recognize_scene_logs_structured_request_and_response(caplog):
 
 
 @pytest.mark.asyncio
-async def test_chat_extract_logs_structured_request_and_response(caplog):
-    structured_result = ChatExtractOutput(
-        new_facts=["日均营业额约1万元"],
-        completeness=CompletenessEval(
-            score=30,
-            summary="已有基础营收信息",
-            missing_aspects=["客单价"],
-            next_question="客单价大概是多少？",
-        ),
+async def test_conversation_turn_logs_request_and_response(caplog):
+    """conversation_turn should log the full request/response cycle."""
+    json_response = (
+        '{"new_facts": ["日均营业额约1万元"], '
+        '"completeness": {"score": 30, "summary": "已有基础营收信息", "missing_aspects": ["客单价"], "next_question": "客单价大概是多少？"}, '
+        '"reply": "了解了。客单价大概是多少？", '
+        '"suggested_replies": ["大概50元", "80元左右", "100多"]}'
     )
-    model = model_with_structured_result(structured_result)
+    model = OpenAICompatibleModel.__new__(OpenAICompatibleModel)
+    model.llm = Mock()
+    model.llm.ainvoke = AsyncMock(return_value=Mock(content=json_response))
     caplog.set_level(logging.INFO, logger="app.services.model_service")
 
-    facts, completeness = await model.chat_extract(
+    result = await model.conversation_turn(
         [{"role": "user", "content": "日均营业额约1万元"}],
         [],
         {"industry": "餐饮"},
     )
 
-    assert facts == ["日均营业额约1万元"]
-    assert completeness.score == 30
-    assert "[chat_extract] LLM Structured request" in caplog.text
+    assert result.new_facts == ["日均营业额约1万元"]
+    assert result.completeness.score == 30
+    assert result.reply == "了解了。客单价大概是多少？"
+    assert result.suggested_replies == ["大概50元", "80元左右", "100多"]
+    assert "[conversation_turn 对话回合] LLM Chat request" in caplog.text
     assert "日均营业额约1万元" in caplog.text
-    assert "[chat_extract] LLM Structured response" in caplog.text
-    assert "'score': 30" in caplog.text
+    assert "[conversation_turn 对话回合] LLM Chat response" in caplog.text
 
 
 @pytest.mark.asyncio

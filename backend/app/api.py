@@ -135,6 +135,7 @@ STAGE_LABELS = {
     "init": "初始化",
     "scene_recognize": "识别行业场景...",
     "greeting_guide": "自我介绍...",
+    "conversation_turn": "分析并回复...",
     "chat_extract": "分析对话...",
     "agent_reply": "思考中...",
     "await_input": "等待您的回复",

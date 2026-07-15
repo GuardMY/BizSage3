@@ -21,6 +21,7 @@ from app.domain.schemas import (
     CompletenessEval,
     ChatExtractOutput,
     AgentReplyOutput,
+    ConversationTurnOutput,
 )
 
 
@@ -42,24 +43,17 @@ class DiagnosisModel(ABC):
         ...
 
     @abstractmethod
-    async def chat_extract(
+    async def conversation_turn(
         self,
         messages: List[Dict[str, str]],
         existing_facts: List[str],
         scene: Dict[str, str],
-    ) -> tuple[List[str], CompletenessEval]:
-        """Extract operational facts + evaluate completeness in one call."""
-        ...
+    ) -> ConversationTurnOutput:
+        """Single-call conversation turn: extract facts + evaluate completeness
+        + generate reply + generate quick-reply suggestions.
 
-    @abstractmethod
-    async def agent_reply(
-        self,
-        raw_facts: List[str],
-        completeness: CompletenessEval,
-        scene: Dict[str, str],
-        messages: List[Dict[str, str]] = None,
-    ) -> AgentReplyOutput:
-        """Generate the next conversational reply + quick-reply suggestions."""
+        Merges the old chat_extract and agent_reply into one LLM call.
+        """
         ...
 
     @abstractmethod
@@ -176,107 +170,72 @@ class OpenAICompatibleModel(DiagnosisModel):
                 "⚠️ 抱歉，当前 AI 服务暂时不可用，无法生成动态回复。请稍后重试，或联系管理员检查模型服务状态。"
             )
 
-    # ─── Chat Extract (structured output — no manual JSON parsing) ────
+    # ─── Conversation Turn (merged: chat_extract + agent_reply) ────────
 
-    async def chat_extract(
+    async def conversation_turn(
         self,
         messages: List[Dict[str, str]],
         existing_facts: List[str],
         scene: Dict[str, str],
-    ) -> tuple[List[str], CompletenessEval]:
-        """Extract new facts + evaluate completeness in one structured call.
+    ) -> ConversationTurnOutput:
+        """Single LLM call: extract facts, evaluate completeness, generate reply
+        and quick-reply suggestions — all in one turn.
 
-        Uses with_structured_output(ChatExtractOutput) — the LLM is forced
-        to emit a tool call matching the schema. Returns a ChatExtractOutput
-        Pydantic instance; no _parse_json needed.
+        Uses JSON-mode prompt for maximum provider compatibility.
         """
         industry = scene.get("industry", "未知行业")
         existing_text = "\n".join(f"- {f}" for f in existing_facts) if existing_facts else "（无）"
         recent = messages[-20:] if len(messages) > 20 else messages
         history_text = json.dumps(recent, ensure_ascii=False)
 
-        system = f"""你是{industry}行业运营顾问，和一位{industry}经营者对话。
+        system = f"""你是{industry}行业运营顾问，正在和一位{industry}经营者对话。
 
 已知事实：
 {existing_text}
 
-任务：
-1. new_facts：从最近对话提取经营相关的新事实，每条约20字，保留模糊表述
-2. completeness：基于{industry}行业特征评估信息完备度
-   - score：0-100分
-   - summary：一句话概括现有信息覆盖情况
-   - missing_aspects：3-5个还缺的方面（行业口语）
-   - next_question：一句自然追问"""
+请在一次回复中完成以下所有任务。严格按 JSON 格式输出，不要包含 markdown 代码块标记：
+
+{{{{
+  "new_facts": ["新提取的运营事实1", "新提取的运营事实2", ...],
+  "completeness": {{{{
+    "score": 0-100的整数,
+    "summary": "一句话概括现有信息覆盖情况",
+    "missing_aspects": ["还缺的方面1", "还缺的方面2", ...],
+    "next_question": "一句自然追问"
+  }}}},
+  "reply": "你的对话回复文本",
+  "suggested_replies": ["预测回答1", "预测回答2", ...]
+}}}}
+
+各字段要求：
+- new_facts：从最近对话提取经营相关的新事实，每条约20字，保留模糊表述。如无新事实则为空数组
+- completeness.score：基于{industry}行业特征评估信息完备度，0-100
+- completeness.summary：一句话概括现有信息
+- completeness.missing_aspects：3-5个还缺的方面（行业口语）
+- completeness.next_question：一句自然追问
+- reply：像懂行的朋友一样简短回复（80字以内），语气自然不机械：
+  1. 对用户刚说的内容表达共情/确认（1句）
+  2. 只问一个问题，之前没问过的，只涉及一个方向，像朋友聊天自然引出
+  3. 如果完备度 >= 80%，在末尾加上：**[信息已比较充分，点击按钮即可生成诊断报告]**
+- suggested_replies：3-10个预测用户可能回复的答案（每条10字以内），用户视角的回答，不是追问"""
 
         try:
-            structured_llm = self.llm.with_structured_output(ChatExtractOutput)
-            messages_payload = [
-                SystemMessage(content=system),
-                HumanMessage(content=f"对话历史：{history_text}"),
-            ]
-            logger.info(
-                "[chat_extract] LLM Structured request\nsystem: %s\nuser: %s",
+            raw = await self._invoke_chat(
                 system,
-                history_text,
+                f"对话历史：{history_text}",
+                history=None,  # history already embedded in user message
+                node_name="conversation_turn 对话回合",
             )
-            result: ChatExtractOutput = await structured_llm.ainvoke(messages_payload)
-            logger.info(
-                "[chat_extract] LLM Structured response:\n%s",
-                result.model_dump(),
-            )
-            return (result.new_facts, result.completeness)
-        except Exception as e:
-            logger.exception("[chat_extract] 对话提取失败: %s", e)
-            return ([], CompletenessEval())
-
-    # ─── Agent Reply (NEW: conversational guide) ────────────────────────
-
-    async def agent_reply(
-        self,
-        raw_facts: List[str],
-        completeness: CompletenessEval,
-        scene: Dict[str, str],
-        messages: List[Dict[str, str]] = None,
-    ) -> AgentReplyOutput:
-        industry = scene.get("industry", "未知行业")
-        facts_text = "\n".join(f"- {f}" for f in raw_facts) if raw_facts else "（暂无）"
-        missing_text = "\n".join(f"- {a}" for a in completeness.missing_aspects) if completeness.missing_aspects else "暂无"
-
-        system = f"""你是 BizSage 运营顾问，正在和一位{industry}行业的经营者聊天。
-
-已知信息：
-{facts_text}
-
-信息完备度：{completeness.score}%
-还缺什么：
-{missing_text}
-
-请像懂行的朋友一样简短回复（80字以内），语气自然不机械。严格按以下结构输出，不得多问：
-1. 对用户刚说的内容表达共情/确认（1句）
-2. 紧接着只问一个问题，之前没问过的，且只涉及一个方向，内容根据上下文生成。像朋友聊天一样自然引出，不要罗列、不要用"我还需要XX数据"这种句式
-3. 如果完备度 >= 80%，在回复末尾加上这一行提示：**[信息已比较充分，点击按钮即可生成诊断报告]**
-
-同时生成 3-10 个 suggested_replies，预测用户可能回复的简短答案（每条 10 字以内），让用户可以一键点击快速回复。
-注意：suggested_replies 必须直接回应用户当前面临的问题，是用户视角的回答，不是追问。
-
-请严格按照以下 JSON 格式输出，不要包含 markdown 代码块标记：
-{{"reply": "你的回复文本", "suggested_replies": ["预测回答1", "预测回答2", ...]}}"""
-
-        recent = (messages or [])[-100:]
-
-        try:
-            raw = await self._invoke_chat(system, "请生成回复和预测回答（JSON格式）", history=recent, node_name="agent_reply 助手回复")
-            # Try structured output first, fall back to JSON parsing
-            result = _parse_agent_reply_output(raw)
+            result = _parse_conversation_turn_output(raw)
             return result
         except Exception:
-            logger.exception("[agent_reply] 助手回复生成失败")
-            fallback_reply = (
-                "⚠️ 抱歉，当前 AI 服务暂时不可用，无法生成动态回复。请稍后重试，或联系管理员检查模型服务状态。"
+            logger.exception("[conversation_turn] 对话回合失败")
+            return ConversationTurnOutput(
+                new_facts=[],
+                completeness=CompletenessEval(),
+                reply="⚠️ 抱歉，当前 AI 服务暂时不可用，无法生成动态回复。请稍后重试，或联系管理员检查模型服务状态。",
+                suggested_replies=[],
             )
-            if completeness.score >= 80:
-                fallback_reply = "⚠️ 抱歉，当前 AI 服务暂时不可用，无法生成动态回复。信息可能已比较充分，你可以尝试点击生成诊断报告，或稍后重试。"
-            return AgentReplyOutput(reply=fallback_reply, suggested_replies=[])
 
     # ─── Diagnose ───────────────────────────────────────────────────────
 
@@ -377,13 +336,13 @@ class OpenAICompatibleModel(DiagnosisModel):
 
 
 
-def _parse_agent_reply_output(raw: str) -> AgentReplyOutput:
-    """Parse the LLM response into AgentReplyOutput.
+def _parse_conversation_turn_output(raw: str) -> ConversationTurnOutput:
+    """Parse the LLM response into ConversationTurnOutput.
 
     Handles:
     - Clean JSON
     - JSON wrapped in ```json code blocks
-    - Plain text fallback (treat the whole text as reply, no suggestions)
+    - Plain text fallback (treat the whole text as reply, empty everything else)
     """
     import re
 
@@ -400,21 +359,38 @@ def _parse_agent_reply_output(raw: str) -> AgentReplyOutput:
         try:
             data = json.loads(json_match.group(0))
             if isinstance(data, dict) and "reply" in data:
-                suggestions = data.get("suggested_replies", [])
-                if isinstance(suggestions, list):
-                    suggestions = [str(s) for s in suggestions[:10]]
-                else:
-                    suggestions = []
-                return AgentReplyOutput(
-                    reply=str(data["reply"]),
-                    suggested_replies=suggestions,
+                # Parse completeness sub-object
+                comp_raw = data.get("completeness", {})
+                completeness = CompletenessEval(
+                    score=int(comp_raw.get("score", 0)),
+                    summary=str(comp_raw.get("summary", "")),
+                    missing_aspects=_ensure_str_list(comp_raw.get("missing_aspects", [])),
+                    next_question=str(comp_raw.get("next_question", "")),
                 )
-        except (json.JSONDecodeError, TypeError, KeyError):
+                return ConversationTurnOutput(
+                    new_facts=_ensure_str_list(data.get("new_facts", [])),
+                    completeness=completeness,
+                    reply=str(data["reply"]),
+                    suggested_replies=_ensure_str_list(data.get("suggested_replies", [])),
+                )
+        except (json.JSONDecodeError, TypeError, KeyError, ValueError):
             pass
 
     # Fallback: treat the entire text as the reply
-    logger.warning("[agent_reply] Could not parse JSON from response, using raw text as reply")
-    return AgentReplyOutput(reply=raw, suggested_replies=[])
+    logger.warning("[conversation_turn] Could not parse JSON from response, using raw text as reply")
+    return ConversationTurnOutput(
+        new_facts=[],
+        completeness=CompletenessEval(),
+        reply=raw,
+        suggested_replies=[],
+    )
+
+
+def _ensure_str_list(val: Any) -> List[str]:
+    """Coerce a value to a list of strings, capped at 10 items."""
+    if not isinstance(val, list):
+        return []
+    return [str(v) for v in val[:10]]
 
 
 # =============================================================================

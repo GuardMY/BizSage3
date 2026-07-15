@@ -166,7 +166,7 @@ class SessionRepository:
         if final_report:
             session.status = "completed"
             session.waiting_for_input = False
-        elif stage in ("agent_reply", "await_input", "chat_extract"):
+        elif stage in ("conversation_turn", "agent_reply", "await_input", "chat_extract"):
             session.status = "collecting"
             session.waiting_for_input = True
         else:

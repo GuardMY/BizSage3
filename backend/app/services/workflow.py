@@ -1,21 +1,18 @@
 """LangGraph conversational workflow for operations diagnosis.
 
-New graph (after removing hardcoded metric matching):
+Graph (after merging chat_extract + agent_reply → conversation_turn):
 
     START → scene_recognize
                 ↓ (no industry)
            greeting_guide → await_input → back to scene_recognize
                 ↓ (has industry)
-           chat_extract (facts + LLM completeness)
-                ↓
-           agent_reply (industry-aware conversational guide)
-                ↓
-           await_input (interrupt, wait for user reply) ←── loop ──┐
-                ↓                                                    │
-           user triggers diagnosis ──→ generate_report → END         │
-                                                                     │
-           (normal reply) ──────────────────────────────────────────┘
+           conversation_turn (facts + completeness + reply + suggestions)
+                ↓                              ↑
+           await_input (interrupt) ────────────┘  (main loop)
 
+           Force diagnose → generate_report → END
+
+Each conversation turn is a SINGLE LLM call (was 2 before the merge).
 Uses LangGraph's interrupt() for human-in-the-loop pauses.
 """
 
@@ -29,7 +26,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import interrupt, Command
 
 from app.config import settings
-from app.domain.schemas import ResumeInput, CompletenessEval
+from app.domain.schemas import ResumeInput, CompletenessEval, ConversationTurnOutput
 from app.services.model_service import DiagnosisModel, create_model
 
 logger = logging.getLogger(__name__)
@@ -139,74 +136,49 @@ def _make_greeting_guide(model: DiagnosisModel):
     return node_greeting_guide
 
 
-def _make_chat_extract(model: DiagnosisModel):
-    """Node: Extract operational facts + LLM completeness evaluation.
+def _make_conversation_turn(model: DiagnosisModel):
+    """Node: Single-call conversation turn — merged chat_extract + agent_reply.
 
-    Replaces the old collect_metrics + check_complete pair.
-    One LLM call does both: extracts facts and scores completeness.
+    One LLM call handles:
+      1. Extract new operational facts
+      2. Evaluate information completeness
+      3. Generate the conversational reply
+      4. Generate quick-reply suggestions
     """
 
-    async def node_chat_extract(state: dict) -> dict:
-        """节点3：聊天提取 —— 从对话中提取运营事实并调用 LLM 评估信息完备度。"""
-        logger.info("Node: chat_extract")
+    async def node_conversation_turn(state: dict) -> dict:
+        """节点3：对话回合 —— 单次 LLM 调用完成事实提取、完备度评估、回复生成、快捷回答。"""
+        logger.info("Node: conversation_turn")
         messages = state.get("messages", [])
         existing_facts = state.get("raw_facts", [])
         scene = state.get("user_scene", {})
 
-        new_facts, completeness = await model.chat_extract(messages, existing_facts, scene)
+        result: ConversationTurnOutput = await model.conversation_turn(
+            messages, existing_facts, scene,
+        )
 
         # Merge new facts with existing
         all_facts = list(existing_facts)
-        for f in new_facts:
+        for f in result.new_facts:
             if f not in all_facts:
                 all_facts.append(f)
 
+        # Append assistant reply to messages
+        messages_out = list(messages)
+        reply = result.reply or ""
+        if reply:
+            messages_out.append({"role": "assistant", "content": reply})
+
         return {
+            "messages": messages_out,
             "raw_facts": all_facts,
-            "completeness": completeness.model_dump(),
-            "stage": "chat_extract",
-        }
-
-    return node_chat_extract
-
-
-def _make_agent_reply(model: DiagnosisModel):
-    """Node: Generate industry-aware conversational reply.
-
-    Uses the completeness evaluation to decide what to ask next.
-    If score >= 80, includes a hint that the user can trigger diagnosis.
-    """
-
-    async def node_agent_reply(state: dict) -> dict:
-        """节点4：智能回复 —— 基于完备度评估生成行业感知的追问回复，引导用户补充信息。"""
-        logger.info("Node: agent_reply")
-        raw_facts = state.get("raw_facts", [])
-        comp_data = state.get("completeness", {})
-        scene = state.get("user_scene", {})
-
-        completeness = CompletenessEval(**comp_data) if comp_data else CompletenessEval()
-
-        result = await model.agent_reply(raw_facts, completeness, scene, state.get("messages", []))
-
-        # Handle both AgentReplyOutput and plain string (backward compat)
-        if isinstance(result, str):
-            reply = result
-            suggested = []
-        else:
-            reply = result.reply
-            suggested = result.suggested_replies or []
-
-        messages = list(state.get("messages", []))
-        messages.append({"role": "assistant", "content": reply})
-
-        return {
-            "messages": messages,
+            "completeness": result.completeness.model_dump(),
             "pending_question": reply,
-            "suggested_replies": suggested,
-            "stage": "agent_reply",
+            "suggested_replies": result.suggested_replies or [],
+            "stage": "conversation_turn",
         }
 
-    return node_agent_reply
+    return node_conversation_turn
 
 
 def _make_await_input():
@@ -276,15 +248,15 @@ def _make_generate_report(model: DiagnosisModel):
 # =============================================================================
 
 def route_after_scene(state: dict) -> str:
-    """场景识别后路由：未识别到行业 → 引导问候；已识别 → 进入聊天提取。"""
+    """场景识别后路由：未识别到行业 → 引导问候；已识别 → 进入对话回合。"""
     scene = state.get("user_scene", {})
     if not scene or not scene.get("industry", ""):
         return "greeting_guide"
-    return "chat_extract"
+    return "conversation_turn"
 
 
 def route_after_await(state: dict) -> str:
-    """等待输入后路由：未识别场景→重新识别；强制诊断→生成报告；正常→聊天提取。"""
+    """等待输入后路由：未识别场景→重新识别；强制诊断→生成报告；正常→对话回合。"""
     force = state.get("force_diagnosis", False)
     if force:
         return "generate_report"
@@ -292,7 +264,7 @@ def route_after_await(state: dict) -> str:
     scene = state.get("user_scene", {})
     if not scene or not scene.get("industry", ""):
         return "scene_recognize"
-    return "chat_extract"
+    return "conversation_turn"
 
 
 def route_after_greeting(state: dict) -> str:
@@ -307,13 +279,15 @@ def route_after_greeting(state: dict) -> str:
 def build_graph(model: Optional[DiagnosisModel] = None) -> StateGraph:
     """Build the conversational diagnosis LangGraph StateGraph.
 
-    Nodes: scene_recognize, greeting_guide, chat_extract, agent_reply,
+    Nodes: scene_recognize, greeting_guide, conversation_turn,
            await_input, generate_report
 
     Flow:
       START → scene_recognize
                 ↓ (no industry) → greeting_guide → await_input → scene_recognize
-                ↓ (has industry) → chat_extract → agent_reply → await_input → chat_extract
+                ↓ (has industry) → conversation_turn → await_input
+                                      ↑____________________↓ (main loop)
+
       Force diagnose: skip straight to generate_report
     """
     if model is None:
@@ -321,43 +295,41 @@ def build_graph(model: Optional[DiagnosisModel] = None) -> StateGraph:
 
     graph = StateGraph(AgentState)
 
-    # 注册所有节点
-    graph.add_node("scene_recognize", _make_scene_recognize(model))     # 节点1：场景识别
-    graph.add_node("greeting_guide", _make_greeting_guide(model))       # 节点2：引导问候
-    graph.add_node("chat_extract", _make_chat_extract(model))           # 节点3：聊天提取
-    graph.add_node("agent_reply", _make_agent_reply(model))             # 节点4：智能回复
-    graph.add_node("await_input", _make_await_input())                  # 节点5：等待输入
-    graph.add_node("generate_report", _make_generate_report(model))     # 节点6：生成报告
+    # 注册所有节点（5 个，从原来的 6 个减少）
+    graph.add_node("scene_recognize", _make_scene_recognize(model))        # 节点1：场景识别
+    graph.add_node("greeting_guide", _make_greeting_guide(model))          # 节点2：引导问候
+    graph.add_node("conversation_turn", _make_conversation_turn(model))    # 节点3：对话回合（合并 chat_extract + agent_reply）
+    graph.add_node("await_input", _make_await_input())                     # 节点4：等待输入
+    graph.add_node("generate_report", _make_generate_report(model))        # 节点5：生成报告
 
     # 构建边
     # START → 场景识别
     graph.add_edge(START, "scene_recognize")
 
-    # 场景识别 → 引导问候（未识别到行业）或 聊天提取（已识别到行业）
+    # 场景识别 → 引导问候（未识别到行业）或 对话回合（已识别到行业）
     graph.add_conditional_edges(
         "scene_recognize",
         route_after_scene,
         {
             "greeting_guide": "greeting_guide",
-            "chat_extract": "chat_extract",
+            "conversation_turn": "conversation_turn",
         },
     )
 
-    # 引导问候 → 等待输入 → 未识别行业则回到场景识别，否则进入聊天提取
+    # 引导问候 → 等待输入 → 未识别行业则回到场景识别，否则进入对话回合
     graph.add_edge("greeting_guide", "await_input")
     graph.add_conditional_edges(
         "await_input",
         route_after_await,
         {
-            "scene_recognize": "scene_recognize",     # 未识别 → 重新识别行业
-            "chat_extract": "chat_extract",           # 继续信息收集
-            "generate_report": "generate_report",     # 强制诊断
+            "scene_recognize": "scene_recognize",        # 未识别 → 重新识别行业
+            "conversation_turn": "conversation_turn",    # 继续信息收集（单次 LLM 调用）
+            "generate_report": "generate_report",        # 强制诊断
         },
     )
 
-    # 聊天提取 → 智能回复 → 等待输入 → 循环回到聊天提取（信息收集主循环）
-    graph.add_edge("chat_extract", "agent_reply")
-    graph.add_edge("agent_reply", "await_input")
+    # 对话回合 → 等待输入 → 循环回到对话回合（信息收集主循环）
+    graph.add_edge("conversation_turn", "await_input")
 
     # 生成报告 → 结束
     graph.add_edge("generate_report", END)

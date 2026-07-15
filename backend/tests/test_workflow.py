@@ -67,7 +67,7 @@ class TestWorkflowInterrupt:
         result = await wf.start("test-session-4", msg)
 
         stage = result.get("stage", "")
-        assert stage in ("agent_reply", "await_input"), f"Expected interrupt stage, got: {stage}"
+        assert stage in ("conversation_turn", "agent_reply", "await_input"), f"Expected interrupt stage, got: {stage}"
 
         messages = result.get("messages", [])
         has_question = any(
@@ -148,7 +148,7 @@ class TestWorkflowComplete:
             assert len(final_report) > 0
         else:
             # Should be in a conversational stage
-            assert stage in ("agent_reply", "await_input", "chat_extract"), \
+                        assert stage in ("conversation_turn", "agent_reply", "await_input", "chat_extract"), \
                 f"Unexpected stage: {stage}"
 
     @pytest.mark.asyncio
