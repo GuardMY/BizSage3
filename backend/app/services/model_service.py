@@ -92,6 +92,15 @@ class OpenAICompatibleModel(DiagnosisModel):
             temperature=settings.llm_temperature,
             max_tokens=settings.llm_max_tokens,
         )
+        # Separate LLM instance with JSON mode for structured outputs
+        self.json_llm = ChatOpenAI(
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
+            model=settings.llm_model,
+            temperature=settings.llm_temperature,
+            max_tokens=settings.llm_max_tokens,
+            model_kwargs={"response_format": {"type": "json_object"}},
+        )
 
     async def _invoke_chat(
         self,
@@ -113,6 +122,30 @@ class OpenAICompatibleModel(DiagnosisModel):
         logger.info("[%s] LLM Chat response:\n%s", node_name, content)
         return content
 
+    async def _invoke_json(
+        self,
+        system: str,
+        user: str,
+        *,
+        history: Optional[List[Dict[str, str]]] = None,
+        node_name: str = "",
+    ) -> str:
+        """Invoke LLM with JSON mode (response_format={'type': 'json_object'}).
+
+        Uses DeepSeek-compatible JSON mode. The system or user prompt MUST contain
+        the word 'json' and a sample JSON structure to guide the model.
+        """
+        messages = [SystemMessage(content=system)]
+        if history:
+            messages.extend(convert_to_messages(history))
+        messages.append(HumanMessage(content=user))
+
+        logger.info("[%s] LLM JSON request\nsystem: %s\nhistory: %s\nuser: %s", node_name, system, history, user)
+        res = await self.json_llm.ainvoke(messages)
+        content = res.content
+        logger.info("[%s] LLM JSON response:\n%s", node_name, content)
+        return content
+
     # ─── Scene Recognition ──────────────────────────────────────────────
 
     async def recognize_scene(self, user_message: str) -> Scene:
@@ -128,7 +161,7 @@ class OpenAICompatibleModel(DiagnosisModel):
 请严格按照 JSON 格式输出，不要包含 markdown 代码块标记：
 {"industry": "识别到的行业名称"}"""
         try:
-            raw = await self._invoke_chat(
+            raw = await self._invoke_json(
                 system,
                 user_message,
                 node_name="scene_recognize 场景识别",
@@ -214,7 +247,7 @@ class OpenAICompatibleModel(DiagnosisModel):
 - suggested_replies：3-10个预测用户可能回复的答案（每条10字以内），用户视角的回答，不是追问"""
 
         try:
-            raw = await self._invoke_chat(
+            raw = await self._invoke_json(
                 system,
                 f"对话历史：{history_text}",
                 history=None,  # history already embedded in user message

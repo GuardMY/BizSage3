@@ -9,25 +9,27 @@ from app.domain.schemas import CompletenessEval, Scene, ConversationTurnOutput
 from app.services.model_service import OpenAICompatibleModel
 
 
-def model_with_invoke_chat(return_value: str):
-    """Build a model that returns a fixed string from _invoke_chat."""
+def model_with_json_response(return_value: str):
+    """Build a model that returns a fixed string from _invoke_json."""
     model = OpenAICompatibleModel.__new__(OpenAICompatibleModel)
     model.llm = Mock()
-    model.llm.ainvoke = AsyncMock(return_value=Mock(content=return_value))
+    model.llm.ainvoke = AsyncMock(return_value=Mock(content=""))
+    model.json_llm = Mock()
+    model.json_llm.ainvoke = AsyncMock(return_value=Mock(content=return_value))
     return model
 
 
 @pytest.mark.asyncio
 async def test_recognize_scene_logs_request_and_response(caplog):
-    model = model_with_invoke_chat('{"industry": "餐饮"}')
+    model = model_with_json_response('{"industry": "餐饮"}')
     caplog.set_level(logging.INFO, logger="app.services.model_service")
 
     result = await model.recognize_scene("我在经营一家餐厅")
 
     assert result.industry == "餐饮"
-    assert "[scene_recognize 场景识别] LLM Chat request" in caplog.text
+    assert "[scene_recognize 场景识别] LLM JSON request" in caplog.text
     assert "我在经营一家餐厅" in caplog.text
-    assert "[scene_recognize 场景识别] LLM Chat response" in caplog.text
+    assert "[scene_recognize 场景识别] LLM JSON response" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -39,9 +41,7 @@ async def test_conversation_turn_logs_request_and_response(caplog):
         '"reply": "了解了。客单价大概是多少？", '
         '"suggested_replies": ["大概50元", "80元左右", "100多"]}'
     )
-    model = OpenAICompatibleModel.__new__(OpenAICompatibleModel)
-    model.llm = Mock()
-    model.llm.ainvoke = AsyncMock(return_value=Mock(content=json_response))
+    model = model_with_json_response(json_response)
     caplog.set_level(logging.INFO, logger="app.services.model_service")
 
     result = await model.conversation_turn(
@@ -54,9 +54,9 @@ async def test_conversation_turn_logs_request_and_response(caplog):
     assert result.completeness.score == 30
     assert result.reply == "了解了。客单价大概是多少？"
     assert result.suggested_replies == ["大概50元", "80元左右", "100多"]
-    assert "[conversation_turn 对话回合] LLM Chat request" in caplog.text
+    assert "[conversation_turn 对话回合] LLM JSON request" in caplog.text
     assert "日均营业额约1万元" in caplog.text
-    assert "[conversation_turn 对话回合] LLM Chat response" in caplog.text
+    assert "[conversation_turn 对话回合] LLM JSON response" in caplog.text
 
 
 @pytest.mark.asyncio
