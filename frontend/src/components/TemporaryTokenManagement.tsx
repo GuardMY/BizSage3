@@ -1,21 +1,16 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
-  ArrowLeft,
   Ban,
   Check,
   Clock3,
   Copy,
   KeyRound,
-  LogOut,
   Plus,
-  ShieldAlert,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { useAuth } from "@/components/AuthProvider";
 import * as api from "@/lib/api";
 import type {
   CreatedTemporaryAccessToken,
@@ -31,8 +26,6 @@ const EXPIRY_OPTIONS = [
 ];
 
 export default function TemporaryTokenManagement() {
-  const router = useRouter();
-  const { session, logout } = useAuth();
   const [tokens, setTokens] = useState<TemporaryAccessToken[]>([]);
   const [name, setName] = useState("");
   const [expiresInHours, setExpiresInHours] = useState(24);
@@ -57,26 +50,8 @@ export default function TemporaryTokenManagement() {
   }, []);
 
   useEffect(() => {
-    if (session?.role === "admin") void loadTokens();
-    else setLoading(false);
-  }, [loadTokens, session?.role]);
-
-  if (session?.role !== "admin") {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-gray-50 px-5">
-        <div className="w-full max-w-md border-t border-gray-300 pt-8 text-center">
-          <ShieldAlert className="mx-auto h-9 w-9 text-amber-500" />
-          <h1 className="mt-4 text-lg font-semibold text-gray-900">无管理员权限</h1>
-          <button
-            onClick={() => router.replace("/")}
-            className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-indigo-600 hover:text-indigo-700"
-          >
-            <ArrowLeft className="h-4 w-4" /> 返回工作台
-          </button>
-        </div>
-      </main>
-    );
-  }
+    void loadTokens();
+  }, [loadTokens]);
 
   async function handleCreate(event: FormEvent) {
     event.preventDefault();
@@ -143,32 +118,6 @@ export default function TemporaryTokenManagement() {
 
   return (
     <main className="min-h-screen bg-gray-50 text-gray-900">
-      <header className="border-b border-gray-200 bg-white">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5 lg:px-8">
-          <div className="flex min-w-0 items-center gap-3">
-            <button
-              onClick={() => router.push("/")}
-              title="返回工作台"
-              aria-label="返回工作台"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-800"
-            >
-              <ArrowLeft className="h-5 w-5" />
-            </button>
-            <div className="min-w-0">
-              <h1 className="truncate text-base font-semibold">管理后台</h1>
-              <p className="text-xs text-gray-500">BizSage3 管理员</p>
-            </div>
-          </div>
-          <button
-            onClick={() => void logout()}
-            className="flex h-9 items-center gap-2 rounded-md px-3 text-sm text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-          >
-            <LogOut className="h-4 w-4" />
-            <span>退出</span>
-          </button>
-        </div>
-      </header>
-
       <div className="mx-auto max-w-6xl px-5 py-8 lg:px-8">
         <section className="grid gap-8 border-b border-gray-200 pb-8 lg:grid-cols-[minmax(0,1fr)_360px]">
           <div>

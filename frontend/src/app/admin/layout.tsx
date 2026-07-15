@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, KeyRound, LogOut, ShieldAlert } from "lucide-react";
+import { ArrowLeft, BookOpen, KeyRound, LogOut, ShieldAlert } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
 
 const tabs = [
@@ -37,6 +37,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <div className="border-b border-gray-200 px-5 py-5">
           <Link href="/" className="text-xs font-medium text-gray-500 hover:text-gray-900">BizSage3</Link>
           <h1 className="mt-1 text-base font-semibold">管理后台</h1>
+        </div>
+
+        <div className="px-3 pt-3">
+          <Link
+            href="/"
+            className="flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            返回工作台
+          </Link>
         </div>
 
         <nav aria-label="管理后台功能" className="flex-1 space-y-1 p-3">
