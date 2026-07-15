@@ -222,17 +222,17 @@ class OpenAICompatibleModel(DiagnosisModel):
 
 请在一次回复中完成以下所有任务。严格按 JSON 格式输出，不要包含 markdown 代码块标记：
 
-{{{{
+{{
   "new_facts": ["新提取的运营事实1", "新提取的运营事实2", ...],
-  "completeness": {{{{
+  "completeness": {{
     "score": 0-100的整数,
     "summary": "一句话概括现有信息覆盖情况",
     "missing_aspects": ["还缺的方面1", "还缺的方面2", ...],
     "next_question": "一句自然追问"
-  }}}},
+  }},
   "reply": "你的对话回复文本",
   "suggested_replies": ["预测回答1", "预测回答2", ...]
-}}}}
+}}
 
 各字段要求：
 - new_facts：从最近对话提取经营相关的新事实，每条约20字，保留模糊表述。如无新事实则为空数组
