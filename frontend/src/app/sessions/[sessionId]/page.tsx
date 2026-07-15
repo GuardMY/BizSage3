@@ -121,7 +121,7 @@ export default function SessionPage() {
           onCreate={handleCreateSession}
           onDelete={handleDeleteSession}
           isAdmin={auth.session?.role === "admin"}
-          onAdmin={() => router.push("/admin")}
+          onAdmin={() => router.push("/admin/tokens")}
           onLogout={() => void auth.logout()}
         />
       }

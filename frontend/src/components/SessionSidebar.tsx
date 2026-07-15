@@ -89,7 +89,7 @@ export default function SessionSidebar({
             className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white"
           >
             <Settings className="h-4 w-4" />
-            <span>访问管理</span>
+            <span>管理后台</span>
           </button>
         )}
         <button
