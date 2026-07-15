@@ -11,6 +11,7 @@ from sqlalchemy import (
     String,
     Text,
     Boolean,
+    JSON,
     UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
@@ -75,6 +76,7 @@ class Message(Base):
     content = Column(Text, nullable=False)
     sequence = Column(Integer, nullable=False)
     client_message_id = Column(String, nullable=True)
+    suggested_replies = Column(JSON, nullable=True)  # LLM-generated quick-reply suggestions
     created_at = Column(DateTime, nullable=False, default=_utcnow)
 
     session = relationship("DiagnosisSession", back_populates="messages")

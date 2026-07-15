@@ -36,6 +36,7 @@ class MessageSchema(BaseModel):
     role: str  # user | assistant
     content: str
     sequence: int
+    suggested_replies: Optional[List[str]] = None  # quick-reply suggestions (assistant only)
     created_at: datetime
 
     model_config = {"from_attributes": True}

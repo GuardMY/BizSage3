@@ -73,6 +73,15 @@ class DiagnosisResult(BaseModel):
     key_strengths: List[str] = Field(default_factory=list, description="核心优势列表")
 
 
+class AgentReplyOutput(BaseModel):
+    """Structured output of agent_reply: the reply text plus quick-reply suggestions."""
+    reply: str = Field(description="对话回复文本")
+    suggested_replies: List[str] = Field(
+        default_factory=list,
+        description="预测用户可能回复的选项（3-10个）",
+    )
+
+
 class ResumeInput(BaseModel):
     """Payload sent to LangGraph when resuming after interrupt()."""
     content: str = Field(description="User's reply text")

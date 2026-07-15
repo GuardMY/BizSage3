@@ -28,6 +28,7 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   sequence: number;
+  suggested_replies?: string[];  // quick-reply options (assistant messages only)
   created_at: string;
 }
 
@@ -156,6 +157,14 @@ export interface SSEErrorEvent {
   };
 }
 
+export interface SSESuggestedReplies {
+  event: "suggested_replies";
+  data: {
+    message_id: string;
+    replies: string[];
+  };
+}
+
 export interface SSEDoneEvent {
   event: "done";
   data: {
@@ -167,6 +176,7 @@ export type SSEEvent =
   | SSEStageEvent
   | SSEAssistantDelta
   | SSEAssistantMessage
+  | SSESuggestedReplies
   | SSEStateEvent
   | SSEReportReady
   | SSEErrorEvent

@@ -44,6 +44,7 @@ def message_schema(msg: Message) -> MessageSchema:
         role=msg.role,
         content=msg.content,
         sequence=msg.sequence,
+        suggested_replies=msg.suggested_replies,
         created_at=msg.created_at,
     )
 

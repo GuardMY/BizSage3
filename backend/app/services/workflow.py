@@ -49,6 +49,7 @@ class AgentState(TypedDict, total=False):
     final_report: str
     stage: str
     pending_question: str
+    suggested_replies: List[str]        # LLM-generated quick-reply options
     force_diagnosis: bool
     error_message: str
 
@@ -73,6 +74,7 @@ def make_initial_state(user_message: str, existing_messages: list = None) -> dic
         "final_report": "",
         "stage": "init",
         "pending_question": "",
+        "suggested_replies": [],
         "force_diagnosis": False,
         "error_message": "",
     }
@@ -184,7 +186,15 @@ def _make_agent_reply(model: DiagnosisModel):
 
         completeness = CompletenessEval(**comp_data) if comp_data else CompletenessEval()
 
-        reply = await model.agent_reply(raw_facts, completeness, scene, state.get("messages", []))
+        result = await model.agent_reply(raw_facts, completeness, scene, state.get("messages", []))
+
+        # Handle both AgentReplyOutput and plain string (backward compat)
+        if isinstance(result, str):
+            reply = result
+            suggested = []
+        else:
+            reply = result.reply
+            suggested = result.suggested_replies or []
 
         messages = list(state.get("messages", []))
         messages.append({"role": "assistant", "content": reply})
@@ -192,6 +202,7 @@ def _make_agent_reply(model: DiagnosisModel):
         return {
             "messages": messages,
             "pending_question": reply,
+            "suggested_replies": suggested,
             "stage": "agent_reply",
         }
 

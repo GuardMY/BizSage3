@@ -21,6 +21,7 @@ import AppShell from "@/components/AppShell";
 import SessionSidebar from "@/components/SessionSidebar";
 import ChatPanel from "@/components/ChatPanel";
 import ChatInput from "@/components/ChatInput";
+import QuickReplies from "@/components/QuickReplies";
 import ReportView from "@/components/ReportView";
 import ProgressPanel from "@/components/ProgressPanel";
 import ErrorBanner from "@/components/ErrorBanner";
@@ -175,6 +176,11 @@ export default function SessionPage() {
                   streamText={diagnosis.streamText}
                   stageLabel={diagnosis.stageLabel}
                   loading={diagnosis.loading}
+                />
+                <QuickReplies
+                  replies={diagnosis.suggestedReplies}
+                  onSelect={handleSend}
+                  disabled={diagnosis.streaming}
                 />
                 <ChatInput
                   onSend={handleSend}

@@ -274,8 +274,16 @@ async def _emit_result(repo: SessionRepository, session, result: dict):
                 {"content": content}, ensure_ascii=False
             )}
 
-            # Save to DB
-            await repo.add_assistant_message(session.id, content)
+            # Save to DB with suggested_replies from workflow state
+            suggestions = result.get("suggested_replies", []) or []
+            saved_msg = await repo.add_assistant_message(session.id, content, suggestions)
+
+            # Emit suggested_replies SSE event if present
+            if suggestions:
+                yield {"event": "suggested_replies", "data": json.dumps(
+                    {"message_id": saved_msg.id, "replies": suggestions},
+                    ensure_ascii=False,
+                )}
 
     # Check if report was generated
     final_report = result.get("final_report", "")

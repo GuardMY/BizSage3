@@ -210,6 +210,7 @@ class SessionRepository:
         self,
         session_id: str,
         content: str,
+        suggested_replies: Optional[List[str]] = None,
     ) -> Message:
         """Add an assistant message to a session."""
         await self._require_session_access(session_id)
@@ -222,6 +223,7 @@ class SessionRepository:
             role="assistant",
             content=content,
             sequence=seq,
+            suggested_replies=suggested_replies,
         )
         self.db.add(msg)
         await self.db.flush()

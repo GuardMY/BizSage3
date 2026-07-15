@@ -24,6 +24,7 @@ export interface UseDiagnosisReturn {
   streaming: boolean;
   streamText: string;
   stageLabel: string;
+  suggestedReplies: string[];
   loading: boolean;
   error: string | null;
   hasReport: boolean;
@@ -52,6 +53,7 @@ export function useDiagnosis(): UseDiagnosisReturn {
   const [reports, setReports] = useState<ReportResponse[]>([]);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportGenerating, setReportGenerating] = useState(false);
+  const [suggestedReplies, setSuggestedReplies] = useState<string[]>([]);
 
   const messagesRef = useRef<Message[]>([]);
   const mounted = useRef(true);
@@ -85,6 +87,7 @@ export function useDiagnosis(): UseDiagnosisReturn {
     setReports([]);
     setReportLoading(false);
     setReportGenerating(false);
+    setSuggestedReplies([]);
     currentSessionId.current = null;
   }, []);
 
@@ -104,6 +107,7 @@ export function useDiagnosis(): UseDiagnosisReturn {
       if (!mounted.current || currentSessionId.current !== id) return;
       setSession(detail);
       setMessages(detail.messages ?? []);
+      setSuggestedReplies(deriveSuggestedReplies(detail.messages ?? []));
       setCompleteness(detail.completeness ?? null);
       setHasReport(detail.has_report ?? false);
       setReportGenerating(detail.report_generating ?? false);
@@ -138,6 +142,7 @@ export function useDiagnosis(): UseDiagnosisReturn {
 
       setStreaming(true);
       setStreamText("");
+      setSuggestedReplies([]);
       setError(null);
 
       const clientMessageId = crypto.randomUUID
@@ -191,12 +196,21 @@ export function useDiagnosis(): UseDiagnosisReturn {
                 if (serverCount >= localCount) {
                   setMessages(data.messages ?? []);
                   messagesRef.current = data.messages ?? [];
+                  setSuggestedReplies(deriveSuggestedReplies(data.messages ?? []));
                 }
                 setCompleteness(data.completeness ?? null);
                 setHasReport(data.has_report ?? false);
                 setReportGenerating(data.report_generating ?? false);
                 setStageLabel(stageLabelForStage(data.stage));
                 setStreamText("");
+                break;
+              }
+              case "suggested_replies": {
+                const data = JSON.parse(sseEvent.data) as {
+                  message_id: string;
+                  replies: string[];
+                };
+                setSuggestedReplies(data.replies ?? []);
                 break;
               }
               case "report.ready": {
@@ -331,6 +345,7 @@ export function useDiagnosis(): UseDiagnosisReturn {
     streaming,
     streamText,
     stageLabel,
+    suggestedReplies,
     loading,
     error,
     hasReport,
@@ -361,4 +376,16 @@ function stageLabelForStage(stage: string): string {
     generate_report: "生成诊断报告...",
   };
   return labels[stage] ?? stage;
+}
+
+/**
+ * Derive suggested replies from the last assistant message.
+ * Only returns suggestions if the last message is from the assistant
+ * (i.e., user hasn't replied yet).
+ */
+function deriveSuggestedReplies(messages: Message[]): string[] {
+  if (messages.length === 0) return [];
+  const last = messages[messages.length - 1];
+  if (last.role !== "assistant") return [];
+  return last.suggested_replies ?? [];
 }

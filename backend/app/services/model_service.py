@@ -20,6 +20,7 @@ from app.domain.schemas import (
     Scene,
     CompletenessEval,
     ChatExtractOutput,
+    AgentReplyOutput,
 )
 
 
@@ -57,8 +58,8 @@ class DiagnosisModel(ABC):
         completeness: CompletenessEval,
         scene: Dict[str, str],
         messages: List[Dict[str, str]] = None,
-    ) -> str:
-        """Generate the next conversational reply to guide the user."""
+    ) -> AgentReplyOutput:
+        """Generate the next conversational reply + quick-reply suggestions."""
         ...
 
     @abstractmethod
@@ -236,7 +237,7 @@ class OpenAICompatibleModel(DiagnosisModel):
         completeness: CompletenessEval,
         scene: Dict[str, str],
         messages: List[Dict[str, str]] = None,
-    ) -> str:
+    ) -> AgentReplyOutput:
         industry = scene.get("industry", "未知行业")
         facts_text = "\n".join(f"- {f}" for f in raw_facts) if raw_facts else "（暂无）"
         missing_text = "\n".join(f"- {a}" for a in completeness.missing_aspects) if completeness.missing_aspects else "暂无"
@@ -255,16 +256,27 @@ class OpenAICompatibleModel(DiagnosisModel):
 2. 紧接着只问一个问题，之前没问过的，且只涉及一个方向，内容根据上下文生成。像朋友聊天一样自然引出，不要罗列、不要用"我还需要XX数据"这种句式
 3. 如果完备度 >= 80%，在回复末尾加上这一行提示：**[信息已比较充分，点击按钮即可生成诊断报告]**
 
-直接输出对话文本，不要JSON，不要markdown代码块。"""
+同时生成 3-10 个 suggested_replies，预测用户可能回复的简短答案（每条 10 字以内），让用户可以一键点击快速回复。
+注意：suggested_replies 必须直接回应用户当前面临的问题，是用户视角的回答，不是追问。
+
+请严格按照以下 JSON 格式输出，不要包含 markdown 代码块标记：
+{{"reply": "你的回复文本", "suggested_replies": ["预测回答1", "预测回答2", ...]}}"""
 
         recent = (messages or [])[-100:]
 
         try:
-            return await self._invoke_chat(system, "请生成回复", history=recent, node_name="agent_reply 助手回复")
+            raw = await self._invoke_chat(system, "请生成回复和预测回答（JSON格式）", history=recent, node_name="agent_reply 助手回复")
+            # Try structured output first, fall back to JSON parsing
+            result = _parse_agent_reply_output(raw)
+            return result
         except Exception:
+            logger.exception("[agent_reply] 助手回复生成失败")
+            fallback_reply = (
+                "⚠️ 抱歉，当前 AI 服务暂时不可用，无法生成动态回复。请稍后重试，或联系管理员检查模型服务状态。"
+            )
             if completeness.score >= 80:
-                return "⚠️ 抱歉，当前 AI 服务暂时不可用，无法生成动态回复。信息可能已比较充分，你可以尝试点击生成诊断报告，或稍后重试。"
-            return "⚠️ 抱歉，当前 AI 服务暂时不可用，无法生成动态回复。请稍后重试，或联系管理员检查模型服务状态。"
+                fallback_reply = "⚠️ 抱歉，当前 AI 服务暂时不可用，无法生成动态回复。信息可能已比较充分，你可以尝试点击生成诊断报告，或稍后重试。"
+            return AgentReplyOutput(reply=fallback_reply, suggested_replies=[])
 
     # ─── Diagnose ───────────────────────────────────────────────────────
 
@@ -363,6 +375,46 @@ class OpenAICompatibleModel(DiagnosisModel):
             logger.exception("[generate_report] 诊断报告生成失败")
             raise
 
+
+
+def _parse_agent_reply_output(raw: str) -> AgentReplyOutput:
+    """Parse the LLM response into AgentReplyOutput.
+
+    Handles:
+    - Clean JSON
+    - JSON wrapped in ```json code blocks
+    - Plain text fallback (treat the whole text as reply, no suggestions)
+    """
+    import re
+
+    text = raw.strip()
+
+    # Try to extract JSON from ```json ... ``` blocks
+    code_block_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+    if code_block_match:
+        text = code_block_match.group(1).strip()
+
+    # Try to find a JSON object in the text
+    json_match = re.search(r"\{.*\}", text, re.DOTALL)
+    if json_match:
+        try:
+            data = json.loads(json_match.group(0))
+            if isinstance(data, dict) and "reply" in data:
+                suggestions = data.get("suggested_replies", [])
+                if isinstance(suggestions, list):
+                    suggestions = [str(s) for s in suggestions[:10]]
+                else:
+                    suggestions = []
+                return AgentReplyOutput(
+                    reply=str(data["reply"]),
+                    suggested_replies=suggestions,
+                )
+        except (json.JSONDecodeError, TypeError, KeyError):
+            pass
+
+    # Fallback: treat the entire text as the reply
+    logger.warning("[agent_reply] Could not parse JSON from response, using raw text as reply")
+    return AgentReplyOutput(reply=raw, suggested_replies=[])
 
 
 # =============================================================================
