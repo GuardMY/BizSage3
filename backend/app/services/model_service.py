@@ -118,31 +118,25 @@ class OpenAICompatibleModel(DiagnosisModel):
     async def recognize_scene(self, user_message: str) -> Scene:
         """Identify the user's industry from conversation context.
 
-        Uses with_structured_output(Scene) — the LLM is forced to emit a
-        tool call matching the Scene schema. Returns a Scene instance
-        directly; no JSON parsing needed.
+        Uses JSON-mode prompt for maximum provider compatibility.
         """
         system = """你是运营诊断场景识别专家。根据用户对话内容识别其所在行业。
 
 行业命名规则：尽量具体，如"火锅""茶饮""SaaS""服装零售"，不要用笼统大类。
-如果无法确定行业，industry 填空字符串。"""
+如果无法确定行业，industry 填空字符串。
+
+请严格按照 JSON 格式输出，不要包含 markdown 代码块标记：
+{"industry": "识别到的行业名称"}"""
         try:
-            structured_llm = self.llm.with_structured_output(Scene)
-            messages = [
-                SystemMessage(content=system),
-                HumanMessage(content=user_message),
-            ]
-            logger.info(
-                "[scene_recognize] LLM Structured request\nsystem: %s\nuser: %s",
+            raw = await self._invoke_chat(
                 system,
                 user_message,
+                node_name="scene_recognize 场景识别",
             )
-            result: Scene = await structured_llm.ainvoke(messages)
-            logger.info(
-                "[scene_recognize] LLM Structured response:\n%s",
-                result.model_dump(),
-            )
-            return result
+            data = json.loads(raw.strip())
+            if isinstance(data, dict) and "industry" in data:
+                return Scene(industry=str(data["industry"]))
+            return Scene()
         except Exception:
             logger.exception("[scene_recognize] 场景识别失败")
             return Scene()

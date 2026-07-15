@@ -1,4 +1,4 @@
-"""Logging coverage for production structured LLM calls."""
+"""Logging coverage for production LLM calls."""
 
 import logging
 from unittest.mock import AsyncMock, Mock
@@ -9,29 +9,25 @@ from app.domain.schemas import CompletenessEval, Scene, ConversationTurnOutput
 from app.services.model_service import OpenAICompatibleModel
 
 
-def model_with_structured_result(result):
-    """Build a production model instance without constructing a real API client."""
-    structured_llm = Mock()
-    structured_llm.ainvoke = AsyncMock(return_value=result)
-
+def model_with_invoke_chat(return_value: str):
+    """Build a model that returns a fixed string from _invoke_chat."""
     model = OpenAICompatibleModel.__new__(OpenAICompatibleModel)
     model.llm = Mock()
-    model.llm.with_structured_output.return_value = structured_llm
+    model.llm.ainvoke = AsyncMock(return_value=Mock(content=return_value))
     return model
 
 
 @pytest.mark.asyncio
-async def test_recognize_scene_logs_structured_request_and_response(caplog):
-    model = model_with_structured_result(Scene(industry="餐饮"))
+async def test_recognize_scene_logs_request_and_response(caplog):
+    model = model_with_invoke_chat('{"industry": "餐饮"}')
     caplog.set_level(logging.INFO, logger="app.services.model_service")
 
     result = await model.recognize_scene("我在经营一家餐厅")
 
     assert result.industry == "餐饮"
-    assert "[scene_recognize] LLM Structured request" in caplog.text
+    assert "[scene_recognize 场景识别] LLM Chat request" in caplog.text
     assert "我在经营一家餐厅" in caplog.text
-    assert "[scene_recognize] LLM Structured response" in caplog.text
-    assert "'industry': '餐饮'" in caplog.text
+    assert "[scene_recognize 场景识别] LLM Chat response" in caplog.text
 
 
 @pytest.mark.asyncio
