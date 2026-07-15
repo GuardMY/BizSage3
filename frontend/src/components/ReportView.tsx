@@ -12,8 +12,14 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import type { ReportResponse } from "@/types";
-import { getReportDownloadUrl } from "@/lib/api";
+import { Download, ExternalLink } from "lucide-react";
+import type { ReportEvidence, ReportResponse } from "@/types";
+import {
+  getKnowledgeOriginalUrl,
+  getKnowledgePreviewUrl,
+  getReportDownloadUrl,
+  getReportEvidences,
+} from "@/lib/api";
 
 interface ReportViewProps {
   sessionId: string;
@@ -29,6 +35,8 @@ export default function ReportView({
   generating,
 }: ReportViewProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [evidences, setEvidences] = useState<ReportEvidence[]>([]);
+  const [evidenceLoading, setEvidenceLoading] = useState(false);
   const orderedReports = useMemo(
     () => [...reports].sort((a, b) => b.created_at.localeCompare(a.created_at)),
     [reports],
@@ -47,6 +55,25 @@ export default function ReportView({
       setSelectedId(orderedReports[0].id);
     }
   }, [orderedReports, selectedId]);
+
+  useEffect(() => {
+    if (!selectedReport) {
+      setEvidences([]);
+      return;
+    }
+    let cancelled = false;
+    setEvidenceLoading(true);
+    void getReportEvidences(selectedReport.id)
+      .then((items) => { if (!cancelled) setEvidences(items); })
+      .catch(() => { if (!cancelled) setEvidences([]); })
+      .finally(() => { if (!cancelled) setEvidenceLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedReport]);
+
+  const renderedMarkdown = useMemo(
+    () => linkEvidenceCitations(selectedReport?.markdown ?? "", evidences),
+    [evidences, selectedReport],
+  );
 
   // --- Loading ---
   if (loading && orderedReports.length === 0) {
@@ -167,7 +194,7 @@ export default function ReportView({
           </div>
         </aside>
 
-        <div className="flex-1 overflow-y-auto print:overflow-visible">
+        <div className="min-w-0 flex-1 overflow-y-auto print:overflow-visible">
           <div className="mx-auto max-w-3xl px-6 py-8 print:px-0 print:py-4">
             <div className="report-content">
               <ReactMarkdown
@@ -187,13 +214,48 @@ export default function ReportView({
                   },
                 }}
               >
-                {selectedReport.markdown}
+                {renderedMarkdown}
               </ReactMarkdown>
             </div>
           </div>
         </div>
+        <EvidencePanel evidences={evidences} loading={evidenceLoading} />
       </div>
     </div>
+  );
+}
+
+function EvidencePanel({ evidences, loading }: { evidences: ReportEvidence[]; loading: boolean }) {
+  return (
+    <aside className="w-full shrink-0 border-t border-gray-200 bg-gray-50 sm:w-72 sm:border-t-0 sm:border-l">
+      <div className="border-b border-gray-200 px-4 py-3">
+        <h3 className="text-sm font-semibold text-gray-800">引用来源</h3>
+      </div>
+      <div className="max-h-72 overflow-y-auto p-3 sm:max-h-none sm:h-[calc(100vh-185px)]">
+        {loading ? (
+          <p className="px-1 py-3 text-xs text-gray-400">正在加载来源...</p>
+        ) : evidences.length === 0 ? (
+          <p className="px-1 py-3 text-xs leading-5 text-gray-400">本报告没有可访问的行业资料引用。</p>
+        ) : (
+          <div className="space-y-3">
+            {evidences.map((evidence) => (
+              <article id={`evidence-${evidence.evidence_no}`} key={evidence.evidence_no} className="border border-gray-200 bg-white p-3">
+                <div className="flex items-start gap-2">
+                  <span className="mt-0.5 shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-xs font-medium text-indigo-700">证据 {evidence.evidence_no}</span>
+                  <div className="min-w-0"><p className="truncate text-sm font-medium text-gray-800">{evidence.document_title}</p><p className="mt-1 text-xs text-gray-500">{sourceTypeLabel(evidence.source_type)} · v{evidence.version_no} · {evidence.status === "superseded" ? "已替代" : "有效"}</p></div>
+                </div>
+                <blockquote className="mt-3 border-l-2 border-gray-200 pl-2 text-xs leading-5 text-gray-600">{evidence.quote}</blockquote>
+                <p className="mt-2 text-xs text-gray-400">{formatLocator(evidence.locator)}{evidence.effective_from ? ` · 生效 ${formatEvidenceDate(evidence.effective_from)}` : ""}</p>
+                <div className="mt-3 flex items-center gap-1">
+                  <a href={getKnowledgePreviewUrl(evidence.document_id, evidence.version_id)} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-indigo-700 hover:bg-indigo-50"><ExternalLink className="h-3.5 w-3.5" /><span>查看原文</span></a>
+                  <a href={getKnowledgeOriginalUrl(evidence.document_id, evidence.version_id)} download className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-gray-600 hover:bg-gray-100"><Download className="h-3.5 w-3.5" /><span>下载原件</span></a>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </div>
+    </aside>
   );
 }
 
@@ -205,6 +267,31 @@ function formatReportDate(iso: string): string {
     minute: "2-digit",
     hour12: false,
   }).format(new Date(iso));
+}
+
+function formatEvidenceDate(iso: string): string {
+  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
+}
+
+function formatLocator(locator: Record<string, unknown>): string {
+  const headingPath = Array.isArray(locator.heading_path) ? locator.heading_path.filter((item): item is string => typeof item === "string").join(" / ") : "";
+  if (headingPath) return headingPath;
+  if (typeof locator.line_start === "number") return `第 ${locator.line_start} 行`;
+  if (typeof locator.paragraph_start === "number") return `第 ${locator.paragraph_start} 段`;
+  if (typeof locator.table_no === "number") return `表格 ${locator.table_no}`;
+  return "原文定位";
+}
+
+function sourceTypeLabel(value: ReportEvidence["source_type"]): string {
+  return { methodology: "行业方法论", benchmark_rule: "基准与规则", case_sop: "案例与 SOP" }[value];
+}
+
+function linkEvidenceCitations(markdown: string, evidences: ReportEvidence[]): string {
+  const available = new Set(evidences.map((item) => item.evidence_no));
+  return markdown.replace(/\[证据\s*(\d+)\]/g, (match, rawNumber: string) => {
+    const number = Number(rawNumber);
+    return available.has(number) ? `[证据 ${number}](#evidence-${number})` : match;
+  });
 }
 
 // ---------------------------------------------------------------------------

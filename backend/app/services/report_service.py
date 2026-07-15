@@ -13,6 +13,11 @@ from app.domain.schemas import CompletenessEval
 from app.models import DiagnosisSession
 from app.repository import SessionRepository
 from app.services.model_service import DiagnosisModel, create_model
+from app.services.knowledge import (
+    knowledge_retrieval_service,
+    persist_report_evidences,
+    validate_report_citations,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -115,16 +120,28 @@ class ReportTaskManager:
     async def _generate(self, context: ReportContext) -> None:
         try:
             model = self._model_factory()
+            query = "\n".join([
+                context.scene.get("industry", ""),
+                *context.raw_facts,
+                *[message["content"] for message in context.messages[-8:] if message.get("role") == "user"],
+            ])
+            evidence = await knowledge_retrieval_service.retrieve(
+                query,
+                context.scene,
+                limit=5,
+            )
             markdown = await model.generate_report(
                 context.raw_facts,
                 context.completeness,
                 context.scene,
                 messages=context.messages,
+                evidence=evidence,
             )
 
             async with self._session_factory() as db:
                 repo = SessionRepository.for_system(db)
-                await repo.save_report(
+                markdown, selected = await validate_report_citations(db, markdown, evidence)
+                report = await repo.save_report(
                     context.session_id,
                     markdown,
                     diagnosis={
@@ -132,6 +149,11 @@ class ReportTaskManager:
                         "raw_facts": context.raw_facts,
                         "completeness": context.completeness.model_dump(),
                     },
+                )
+                await persist_report_evidences(
+                    db,
+                    report_id=report.id,
+                    selected=selected,
                 )
                 await repo.finish_report_generation(context.session_id)
                 await db.commit()

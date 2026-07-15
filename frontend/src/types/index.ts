@@ -102,6 +102,65 @@ export interface CreatedTemporaryAccessToken extends TemporaryAccessToken {
   token: string;
 }
 
+// Platform industry knowledge base
+
+export type KnowledgeSourceType = "methodology" | "benchmark_rule" | "case_sop";
+
+export interface KnowledgeIngestionJob {
+  id: string;
+  state: string;
+  parser: string | null;
+  error: string | null;
+  retry_count: number;
+  indexed_at: string | null;
+  created_at: string;
+}
+
+export interface KnowledgeVersion {
+  id: string;
+  document_id: string;
+  version_no: number;
+  original_filename: string;
+  content_type: string;
+  source_type: KnowledgeSourceType;
+  sha256: string;
+  status: "draft" | "parsing" | "pending_review" | "published" | "superseded" | "revoked";
+  effective_from: string | null;
+  effective_to: string | null;
+  industry_tags: string[];
+  sub_industry_tags: string[];
+  business_mode_tags: string[];
+  operating_stage_tags: string[];
+  chunk_count: number;
+  latest_job: KnowledgeIngestionJob | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeDocument {
+  id: string;
+  title: string;
+  current_version_id: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  versions: KnowledgeVersion[];
+}
+
+export interface ReportEvidence {
+  evidence_no: number;
+  document_id: string;
+  version_id: string;
+  document_title: string;
+  source_type: KnowledgeSourceType;
+  version_no: number;
+  effective_from: string | null;
+  status: "published" | "superseded";
+  quote: string;
+  locator: Record<string, unknown>;
+  retrieved_at: string;
+}
+
 // ─── Meta ──────────────────────────────────────────────────────────────
 
 export interface MetricDef {
@@ -187,6 +246,7 @@ export type SSEEvent =
 export type DiagnosisStage =
   | "init"
   | "scene_recognize"
+  | "retrieve_industry_knowledge"
   | "greeting_guide"
   | "chat_extract"
   | "agent_reply"
@@ -232,6 +292,7 @@ export interface StageLabels {
 export const STAGE_LABELS: StageLabels = {
   init: "初始化",
   scene_recognize: "识别行业场景...",
+  retrieve_industry_knowledge: "检索行业资料...",
   greeting_guide: "自我介绍...",
   conversation_turn: "分析并回复...",
   chat_extract: "分析对话...",

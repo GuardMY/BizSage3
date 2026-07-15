@@ -44,6 +44,7 @@ class MockDiagnosisModel(DiagnosisModel):
         messages: List[Dict[str, str]],
         existing_facts: List[str],
         scene: Dict[str, str],
+        evidence=None,
     ) -> ConversationTurnOutput:
         """Merged chat_extract + agent_reply for deterministic testing."""
         user_msgs = [m for m in messages if m.get("role") == "user"]
@@ -107,6 +108,7 @@ class MockDiagnosisModel(DiagnosisModel):
         completeness: CompletenessEval,
         scene: Dict[str, str],
         messages: List[Dict[str, str]] = None,
+        evidence=None,
     ) -> str:
         industry = scene.get("industry", "未知行业")
         warning = ""

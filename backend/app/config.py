@@ -18,6 +18,20 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.0
     llm_max_tokens: int = 2048
 
+    # Knowledge base: OpenAI-compatible embeddings, object storage and vectors.
+    embedding_api_key: str = ""
+    embedding_base_url: str = ""
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dimensions: int = 1536
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_collection: str = "knowledge_chunks"
+    minio_endpoint: str = "localhost:9000"
+    minio_access_key: str = "minioadmin"
+    minio_secret_key: str = "minioadmin"
+    minio_secure: bool = False
+    minio_bucket: str = "bizsage-knowledge"
+    knowledge_upload_max_bytes: int = 20 * 1024 * 1024
+
     # Completeness threshold per design doc
     complete_threshold: int = 80
 
@@ -38,3 +52,13 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def embedding_api_key() -> str:
+    """Use a dedicated embedding credential only when one is configured."""
+    return settings.embedding_api_key or settings.openai_api_key
+
+
+def embedding_base_url() -> str:
+    """Use a dedicated embedding endpoint only when one is configured."""
+    return settings.embedding_base_url or settings.openai_base_url

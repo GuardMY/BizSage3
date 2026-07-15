@@ -27,6 +27,11 @@ from app.serializers import session_summary, session_detail, report_response
 from app.repository import SessionRepository
 from app.services.workflow import workflow_manager
 from app.services.report_service import ReportContext, report_task_manager
+from app.services.knowledge import (
+    evidence_from_state,
+    persist_report_evidences,
+    validate_report_citations,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +139,7 @@ async def delete_session(
 STAGE_LABELS = {
     "init": "初始化",
     "scene_recognize": "识别行业场景...",
+    "retrieve_industry_knowledge": "检索行业资料...",
     "greeting_guide": "自我介绍...",
     "conversation_turn": "分析并回复...",
     "chat_extract": "分析对话...",
@@ -289,12 +295,17 @@ async def _emit_result(repo: SessionRepository, session, result: dict):
     # Check if report was generated
     final_report = result.get("final_report", "")
     if final_report:
-        # Save report to DB
-        await repo.save_report(
+        final_report, selected = await validate_report_citations(
+            repo.db,
+            final_report,
+            evidence_from_state(result.get("report_evidence", [])),
+        )
+        report = await repo.save_report(
             session.id,
             markdown=final_report,
             diagnosis={"raw": result.get("diagnosis_result", "")},
         )
+        await persist_report_evidences(repo.db, report_id=report.id, selected=selected)
         yield {"event": "report.ready", "data": json.dumps(
             {"session_id": session.id}, ensure_ascii=False
         )}

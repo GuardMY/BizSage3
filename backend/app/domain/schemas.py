@@ -7,6 +7,9 @@ from pydantic import BaseModel, Field
 class Scene(BaseModel):
     """Scene recognition output (node_scene_recognize)."""
     industry: str = Field(default="", description="行业: 电商|本地生活|新媒体内容|ToB企业服务|线下零售|教育")
+    sub_industry: str = Field(default="", description="子行业或品类")
+    business_mode: str = Field(default="", description="业务模式，如外卖、到店、订阅")
+    operating_stage: str = Field(default="", description="经营阶段，如起步、增长、成熟")
 
 
 class MetricValue(BaseModel):

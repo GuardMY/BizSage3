@@ -16,6 +16,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
+import KnowledgeManagement from "@/components/KnowledgeManagement";
 import * as api from "@/lib/api";
 import type {
   CreatedTemporaryAccessToken,
@@ -155,7 +156,7 @@ export default function AdminPage() {
               <ArrowLeft className="h-5 w-5" />
             </button>
             <div className="min-w-0">
-              <h1 className="truncate text-base font-semibold">访问令牌管理</h1>
+              <h1 className="truncate text-base font-semibold">管理控制台</h1>
               <p className="text-xs text-gray-500">BizSage3 管理员</p>
             </div>
           </div>
@@ -326,6 +327,7 @@ export default function AdminPage() {
             )}
           </div>
         </section>
+        <KnowledgeManagement />
       </div>
     </main>
   );

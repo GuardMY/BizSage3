@@ -18,6 +18,10 @@ import type {
   AuthSession,
   TemporaryAccessToken,
   CreatedTemporaryAccessToken,
+  KnowledgeDocument,
+  KnowledgeSourceType,
+  KnowledgeVersion,
+  ReportEvidence,
 } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -110,6 +114,93 @@ export async function deleteTemporaryToken(id: string): Promise<void> {
     { method: "DELETE" },
   );
   return handleResponse<void>(res);
+}
+
+// ---------------------------------------------------------------------------
+// Industry knowledge
+// ---------------------------------------------------------------------------
+
+export interface KnowledgeUploadInput {
+  title?: string;
+  sourceType: KnowledgeSourceType;
+  file: File;
+  industryTags: string;
+  subIndustryTags: string;
+  businessModeTags: string;
+  operatingStageTags: string;
+}
+
+function knowledgeForm(input: KnowledgeUploadInput, includeTitle: boolean): FormData {
+  const form = new FormData();
+  if (includeTitle) form.set("title", input.title?.trim() ?? "");
+  form.set("source_type", input.sourceType);
+  form.set("file", input.file);
+  form.set("industry_tags", input.industryTags);
+  form.set("sub_industry_tags", input.subIndustryTags);
+  form.set("business_mode_tags", input.businessModeTags);
+  form.set("operating_stage_tags", input.operatingStageTags);
+  return form;
+}
+
+export async function listKnowledgeDocuments(): Promise<KnowledgeDocument[]> {
+  const res = await request(`${apiBase()}/admin/knowledge/documents`);
+  return handleResponse<KnowledgeDocument[]>(res);
+}
+
+export async function createKnowledgeDocument(input: KnowledgeUploadInput): Promise<KnowledgeDocument> {
+  const res = await request(`${apiBase()}/admin/knowledge/documents`, {
+    method: "POST",
+    body: knowledgeForm(input, true),
+  });
+  return handleResponse<KnowledgeDocument>(res);
+}
+
+export async function createKnowledgeDocumentVersion(
+  documentId: string,
+  input: KnowledgeUploadInput,
+): Promise<KnowledgeDocument> {
+  const res = await request(
+    `${apiBase()}/admin/knowledge/documents/${encodeURIComponent(documentId)}/versions`,
+    { method: "POST", body: knowledgeForm(input, false) },
+  );
+  return handleResponse<KnowledgeDocument>(res);
+}
+
+export async function publishKnowledgeVersion(versionId: string): Promise<KnowledgeVersion> {
+  const res = await request(
+    `${apiBase()}/admin/knowledge/versions/${encodeURIComponent(versionId)}/publish`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+  );
+  return handleResponse<KnowledgeVersion>(res);
+}
+
+export async function revokeKnowledgeVersion(versionId: string): Promise<void> {
+  const res = await request(
+    `${apiBase()}/admin/knowledge/versions/${encodeURIComponent(versionId)}/revoke`,
+    { method: "POST" },
+  );
+  return handleResponse<void>(res);
+}
+
+export async function retryKnowledgeIngestion(versionId: string): Promise<KnowledgeVersion> {
+  const res = await request(
+    `${apiBase()}/admin/knowledge/versions/${encodeURIComponent(versionId)}/retry`,
+    { method: "POST" },
+  );
+  return handleResponse<KnowledgeVersion>(res);
+}
+
+export function getKnowledgePreviewUrl(documentId: string, versionId: string): string {
+  return `${apiBase()}/knowledge/documents/${encodeURIComponent(documentId)}/versions/${encodeURIComponent(versionId)}/preview`;
+}
+
+export function getKnowledgeOriginalUrl(documentId: string, versionId: string): string {
+  return `${apiBase()}/knowledge/documents/${encodeURIComponent(documentId)}/versions/${encodeURIComponent(versionId)}/original`;
+}
+
+export async function getReportEvidences(reportId: string): Promise<ReportEvidence[]> {
+  const res = await request(`${apiBase()}/reports/${encodeURIComponent(reportId)}/evidences`);
+  return handleResponse<ReportEvidence[]>(res);
 }
 
 // ---------------------------------------------------------------------------

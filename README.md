@@ -116,6 +116,15 @@ Next.js，并在 Compose 内部网络中将 `/api/*` 请求直接转发到 FastA
 APP_PORT=8080
 ```
 
+行业知识库会随 Compose 启动 MinIO 和 Qdrant，并通过内部网络提供原件存储与向量检索。生产环境请在项目根目录 `.env` 中设置独立的 MinIO 管理凭据：
+
+```dotenv
+MINIO_ROOT_USER=bizsage-minio
+MINIO_ROOT_PASSWORD=replace-with-a-long-random-password
+```
+
+嵌入默认复用 `backend/.env` 中的 `OPENAI_API_KEY`、`OPENAI_BASE_URL` 与 `text-embedding-3-small`；可通过 `EMBEDDING_API_KEY`、`EMBEDDING_BASE_URL`、`EMBEDDING_MODEL` 和 `EMBEDDING_DIMENSIONS` 单独覆盖。资料原件仅限 DOCX、Markdown 和 TXT，单个文件最大 20 MB。
+
 镜像构建默认使用清华 PyPI 和 npmmirror。如需切换到其他镜像，可在项目根目录的
 `.env` 中覆盖：
 
