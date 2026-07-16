@@ -4,6 +4,8 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 from pydantic import BaseModel, Field
 
+from app.domain.schemas import ConversationCitation
+
 
 # =============================================================================
 # Session Schemas
@@ -37,6 +39,7 @@ class MessageSchema(BaseModel):
     content: str
     sequence: int
     suggested_replies: Optional[List[str]] = None  # quick-reply suggestions (assistant only)
+    citations: Optional[List[ConversationCitation]] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -271,6 +271,7 @@ async def _emit_result(repo: SessionRepository, session, result: dict):
         content = msg_dict.get("content", "")
 
         if role == "assistant" and content:
+            citations = msg_dict.get("citations") or None
             # Stream as delta events (simulate word-by-word for real-time feel)
             yield {"event": "assistant.delta", "data": json.dumps(
                 {"target": "message", "delta": content[:50]}, ensure_ascii=False
@@ -278,12 +279,17 @@ async def _emit_result(repo: SessionRepository, session, result: dict):
 
             # Full message event
             yield {"event": "assistant.message", "data": json.dumps(
-                {"content": content}, ensure_ascii=False
+                {"content": content, "citations": citations}, ensure_ascii=False
             )}
 
             # Save to DB with suggested_replies from workflow state
             suggestions = result.get("suggested_replies", []) or []
-            saved_msg = await repo.add_assistant_message(session.id, content, suggestions)
+            saved_msg = await repo.add_assistant_message(
+                session.id,
+                content,
+                suggestions,
+                citations=citations,
+            )
 
             # Emit suggested_replies SSE event if present
             if suggestions:

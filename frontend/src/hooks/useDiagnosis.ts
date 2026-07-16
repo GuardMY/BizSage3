@@ -175,11 +175,15 @@ export function useDiagnosis(): UseDiagnosisReturn {
                 break;
               }
               case "assistant.message": {
-                const data = JSON.parse(sseEvent.data) as { content: string };
+                const data = JSON.parse(sseEvent.data) as {
+                  content: string;
+                  citations?: Message["citations"];
+                };
                 const assistantMsg: Message = {
                   id: `assistant-${Date.now()}`,
                   role: "assistant",
                   content: data.content ?? "",
+                  citations: data.citations ?? undefined,
                   sequence: 0,
                   created_at: new Date().toISOString(),
                 };

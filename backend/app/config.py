@@ -32,6 +32,22 @@ class Settings(BaseSettings):
     minio_bucket: str = "bizsage-knowledge"
     knowledge_upload_max_bytes: int = 20 * 1024 * 1024
 
+    # Public web search. Providers stay disabled until explicitly enabled and
+    # configured, so a missing credential never blocks a conversation.
+    web_search_enabled: bool = False
+    web_search_strategy: str = "fallback"
+    web_search_providers: str = "tavily,bing"
+    web_search_timeout_seconds: float = 8.0
+    web_search_total_timeout_seconds: float = 10.0
+    web_search_max_results: int = 5
+    web_search_max_query_length: int = 500
+    web_search_max_domains: int = 5
+    web_search_max_tool_calls: int = 4
+    web_search_retries: int = 1
+    tavily_api_key: str = ""
+    bing_search_api_key: str = ""
+    bing_search_endpoint: str = "https://api.bing.microsoft.com/v7.0/search"
+
     # Completeness threshold per design doc
     complete_threshold: int = 80
 

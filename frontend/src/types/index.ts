@@ -23,12 +23,24 @@ export type SessionStatus =
 
 // ─── Message ───────────────────────────────────────────────────────────
 
+export interface ConversationCitation {
+  citation_id: string;
+  source_type: "knowledge" | "web";
+  title: string;
+  url?: string | null;
+  quote: string;
+  locator: Record<string, unknown>;
+  provider?: string | null;
+  published_at?: string | null;
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
   sequence: number;
   suggested_replies?: string[];  // quick-reply options (assistant messages only)
+  citations?: ConversationCitation[] | null;
   created_at: string;
 }
 
@@ -194,6 +206,7 @@ export interface SSEAssistantMessage {
   event: "assistant.message";
   data: {
     content: string;
+    citations?: ConversationCitation[] | null;
   };
 }
 

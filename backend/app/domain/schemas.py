@@ -1,6 +1,7 @@
 """Domain Pydantic models for structured data in the LangGraph workflow."""
 
-from typing import Optional, List, Dict, Any
+from datetime import datetime
+from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field
 
 
@@ -88,6 +89,30 @@ class AgentReplyOutput(BaseModel):
     )
 
 
+class ConversationCitation(BaseModel):
+    """A verified source that may be displayed beneath an assistant message."""
+
+    citation_id: str
+    source_type: Literal["knowledge", "web"]
+    title: str
+    url: Optional[str] = None
+    quote: str = ""
+    locator: Dict[str, Any] = Field(default_factory=dict)
+    provider: Optional[str] = None
+    published_at: Optional[datetime] = None
+
+
+class ToolInvocationSummary(BaseModel):
+    """Safe, JSON-only summary of one read-only tool invocation."""
+
+    tool_name: str
+    provider: Optional[str] = None
+    status: Literal["success", "unavailable", "error", "limited"]
+    latency_ms: int = 0
+    result_count: int = 0
+    error_type: Optional[str] = None
+
+
 class ConversationTurnOutput(BaseModel):
     """Merged output of chat_extract + agent_reply in a single LLM call.
 
@@ -101,6 +126,11 @@ class ConversationTurnOutput(BaseModel):
         default_factory=list,
         description="预测用户可能回复的选项（3-10个）",
     )
+    citations: List[ConversationCitation] = Field(default_factory=list)
+    tool_invocations: List[ToolInvocationSummary] = Field(default_factory=list)
+    # Retained only in LangGraph state. API persistence uses the verified
+    # citations above, so unreferenced search results are never displayed.
+    tool_evidence: List[ConversationCitation] = Field(default_factory=list, exclude=True)
 
 
 class ResumeInput(BaseModel):

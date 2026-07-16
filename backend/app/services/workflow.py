@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 class AgentState(TypedDict, total=False):
     """State shared across all workflow nodes."""
-    messages: List[Dict[str, str]]
+    messages: List[Dict[str, Any]]
     user_scene: Dict[str, str]
     raw_facts: List[str]
     completeness: Dict[str, Any]        # serialized CompletenessEval
@@ -52,7 +52,8 @@ class AgentState(TypedDict, total=False):
     stage: str
     pending_question: str
     suggested_replies: List[str]        # LLM-generated quick-reply options
-    knowledge_evidence: List[Dict[str, Any]]
+    conversation_evidence: List[Dict[str, Any]]
+    tool_invocations: List[Dict[str, Any]]
     report_evidence: List[Dict[str, Any]]
     force_diagnosis: bool
     error_message: str
@@ -79,7 +80,8 @@ def make_initial_state(user_message: str, existing_messages: list = None) -> dic
         "stage": "init",
         "pending_question": "",
         "suggested_replies": [],
-        "knowledge_evidence": [],
+        "conversation_evidence": [],
+        "tool_invocations": [],
         "report_evidence": [],
         "force_diagnosis": False,
         "error_message": "",
@@ -161,10 +163,8 @@ def _make_conversation_turn(model: DiagnosisModel):
         messages = state.get("messages", [])
         existing_facts = state.get("raw_facts", [])
         scene = state.get("user_scene", {})
-        evidence = evidence_from_state(state.get("knowledge_evidence", []))
-
         result: ConversationTurnOutput = await model.conversation_turn(
-            messages, existing_facts, scene, evidence=evidence,
+            messages, existing_facts, scene,
         )
 
         # Merge new facts with existing
@@ -177,7 +177,11 @@ def _make_conversation_turn(model: DiagnosisModel):
         messages_out = list(messages)
         reply = result.reply or ""
         if reply:
-            messages_out.append({"role": "assistant", "content": reply})
+            messages_out.append({
+                "role": "assistant",
+                "content": reply,
+                "citations": [citation.model_dump() for citation in result.citations],
+            })
 
         return {
             "messages": messages_out,
@@ -185,30 +189,12 @@ def _make_conversation_turn(model: DiagnosisModel):
             "completeness": result.completeness.model_dump(),
             "pending_question": reply,
             "suggested_replies": result.suggested_replies or [],
+            "conversation_evidence": [citation.model_dump() for citation in result.tool_evidence],
+            "tool_invocations": [invocation.model_dump() for invocation in result.tool_invocations],
             "stage": "conversation_turn",
         }
 
     return node_conversation_turn
-
-
-def _make_retrieve_industry_knowledge():
-    """Fetch small, authorized context before each LLM conversation turn."""
-
-    async def node_retrieve_industry_knowledge(state: dict) -> dict:
-        messages = state.get("messages", [])
-        user_messages = [item.get("content", "") for item in messages if item.get("role") == "user"]
-        query = user_messages[-1] if user_messages else ""
-        evidence = await knowledge_retrieval_service.retrieve(
-            query,
-            state.get("user_scene", {}),
-            limit=3,
-        )
-        return {
-            "knowledge_evidence": [evidence_to_state(item) for item in evidence],
-            "stage": "retrieve_industry_knowledge",
-        }
-
-    return node_retrieve_industry_knowledge
 
 
 def _make_await_input():
@@ -290,7 +276,7 @@ def route_after_scene(state: dict) -> str:
     scene = state.get("user_scene", {})
     if not scene or not scene.get("industry", ""):
         return "greeting_guide"
-    return "retrieve_industry_knowledge"
+    return "conversation_turn"
 
 
 def route_after_await(state: dict) -> str:
@@ -302,7 +288,7 @@ def route_after_await(state: dict) -> str:
     scene = state.get("user_scene", {})
     if not scene or not scene.get("industry", ""):
         return "scene_recognize"
-    return "retrieve_industry_knowledge"
+    return "conversation_turn"
 
 
 def route_after_greeting(state: dict) -> str:
@@ -317,14 +303,14 @@ def route_after_greeting(state: dict) -> str:
 def build_graph(model: Optional[DiagnosisModel] = None) -> StateGraph:
     """Build the conversational diagnosis LangGraph StateGraph.
 
-    Nodes: scene_recognize, retrieve_industry_knowledge, greeting_guide, conversation_turn,
+    Nodes: scene_recognize, greeting_guide, conversation_turn,
            await_input, generate_report
 
     Flow:
       START → scene_recognize
                 ↓ (no industry) → greeting_guide → await_input → scene_recognize
-                ↓ (has industry) → retrieve_industry_knowledge → conversation_turn → await_input
-                                      ↑____________________↓ (main loop)
+                ↓ (has industry) → conversation_turn → await_input
+                                      ↑_______________↓ (main loop)
 
       Force diagnose: skip straight to generate_report
     """
@@ -333,9 +319,9 @@ def build_graph(model: Optional[DiagnosisModel] = None) -> StateGraph:
 
     graph = StateGraph(AgentState)
 
-    # 注册所有节点（5 个，从原来的 6 个减少）
+    # Register conversation and report nodes. Report retrieval remains inside
+    # generate_report and is intentionally separate from the tool loop.
     graph.add_node("scene_recognize", _make_scene_recognize(model))        # 节点1：场景识别
-    graph.add_node("retrieve_industry_knowledge", _make_retrieve_industry_knowledge())
     graph.add_node("greeting_guide", _make_greeting_guide(model))
     graph.add_node("conversation_turn", _make_conversation_turn(model))
     graph.add_node("await_input", _make_await_input())
@@ -351,7 +337,7 @@ def build_graph(model: Optional[DiagnosisModel] = None) -> StateGraph:
         route_after_scene,
         {
             "greeting_guide": "greeting_guide",
-            "retrieve_industry_knowledge": "retrieve_industry_knowledge",
+            "conversation_turn": "conversation_turn",
         },
     )
 
@@ -362,12 +348,10 @@ def build_graph(model: Optional[DiagnosisModel] = None) -> StateGraph:
         route_after_await,
         {
             "scene_recognize": "scene_recognize",        # 未识别 → 重新识别行业
-            "retrieve_industry_knowledge": "retrieve_industry_knowledge",
+            "conversation_turn": "conversation_turn",
             "generate_report": "generate_report",        # 强制诊断
         },
     )
-
-    graph.add_edge("retrieve_industry_knowledge", "conversation_turn")
 
     # 对话回合 → 等待输入 → 循环回到对话回合（信息收集主循环）
     graph.add_edge("conversation_turn", "await_input")

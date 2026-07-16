@@ -77,6 +77,7 @@ class Message(Base):
     sequence = Column(Integer, nullable=False)
     client_message_id = Column(String, nullable=True)
     suggested_replies = Column(JSON, nullable=True)  # LLM-generated quick-reply suggestions
+    citations = Column(JSON, nullable=True)  # verified conversation source cards
     created_at = Column(DateTime, nullable=False, default=_utcnow)
 
     session = relationship("DiagnosisSession", back_populates="messages")
