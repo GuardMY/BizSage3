@@ -16,8 +16,24 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("messages", sa.Column("citations", sa.JSON(), nullable=True))
+    if op.get_context().as_sql:
+        op.add_column("messages", sa.Column("citations", sa.JSON(), nullable=True))
+        return
+    inspector = sa.inspect(op.get_bind())
+    if not inspector.has_table("messages"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("messages")}
+    if "citations" not in columns:
+        op.add_column("messages", sa.Column("citations", sa.JSON(), nullable=True))
 
 
 def downgrade() -> None:
-    op.drop_column("messages", "citations")
+    if op.get_context().as_sql:
+        op.drop_column("messages", "citations")
+        return
+    inspector = sa.inspect(op.get_bind())
+    if not inspector.has_table("messages"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("messages")}
+    if "citations" in columns:
+        op.drop_column("messages", "citations")
