@@ -552,6 +552,7 @@ class KnowledgeRetrievalService:
         scene: dict[str, str],
         *,
         limit: int = 5,
+        raise_on_error: bool = False,
     ) -> list[EvidenceContext]:
         if not self._ready or not query.strip():
             return []
@@ -560,6 +561,8 @@ class KnowledgeRetrievalService:
             recalled = await self._vector_index.search(vector, scene, max(limit * 4, 12))
         except Exception:
             logger.exception("Knowledge retrieval failed")
+            if raise_on_error:
+                raise
             return []
         if not recalled:
             await self._audit_retrieval(query, scene, [])

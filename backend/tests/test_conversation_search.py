@@ -29,6 +29,12 @@ class FakeProvider:
         return self.result
 
 
+class FailingKnowledgeService:
+    async def retrieve(self, query, scene, *, limit, raise_on_error=False):
+        assert raise_on_error is True
+        raise RuntimeError("embedding endpoint returned 404")
+
+
 class FakeHttpClient:
     def __init__(self, response: httpx.Response) -> None:
         self.response = response
@@ -217,6 +223,22 @@ async def test_model_tool_loop_keeps_only_citations_returned_by_tools():
     assert result.reply == "政策有更新。[资料 1] 以及虚构来源。"
     assert result.citations == executor.evidence
     assert result.tool_evidence == executor.evidence
+
+
+@pytest.mark.asyncio
+async def test_knowledge_tool_exposes_embedding_failure_to_the_model():
+    from app.services.search.tools import ConversationToolExecutor
+
+    executor = ConversationToolExecutor(knowledge_service=FailingKnowledgeService())
+    raw = await executor.execute(
+        "search_knowledge_base",
+        {"query": "餐饮客流"},
+        {"industry": "餐饮"},
+    )
+
+    assert '"status": "error"' in raw
+    assert '"reason": "knowledge_retrieval_failed"' in raw
+    assert executor.invocations[0].status == "error"
 
 
 def test_scene_routing_enters_tool_enabled_conversation_turn_directly():

@@ -140,7 +140,16 @@ class ConversationToolExecutor:
         args: dict[str, Any],
         scene: dict[str, str],
     ) -> tuple[list[ConversationCitation], str | None, str, str | None]:
-        evidence = await self._knowledge_service.retrieve(args["query"], scene, limit=args["limit"])
+        try:
+            evidence = await self._knowledge_service.retrieve(
+                args["query"],
+                scene,
+                limit=args["limit"],
+                raise_on_error=True,
+            )
+        except Exception:
+            logger.exception("Knowledge-base tool retrieval failed")
+            return [], None, "error", "knowledge_retrieval_failed"
         citations = [
             self._register(SearchResult(
                 citation_id="",
