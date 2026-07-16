@@ -7,10 +7,27 @@ from pydantic import BaseModel, Field
 
 class Scene(BaseModel):
     """Scene recognition output (node_scene_recognize)."""
-    industry: str = Field(default="", description="行业: 电商|本地生活|新媒体内容|ToB企业服务|线下零售|教育")
+    industry: str = Field(default="", description="自由文本行业名称")
     sub_industry: str = Field(default="", description="子行业或品类")
     business_mode: str = Field(default="", description="业务模式，如外卖、到店、订阅")
     operating_stage: str = Field(default="", description="经营阶段，如起步、增长、成熟")
+
+
+class ConversationDecision(BaseModel):
+    """LLM routing decision for one user message. The reply is user-visible."""
+
+    decision: Literal[
+        "continue_diagnosis",
+        "clarify_scene",
+        "general_reply",
+        "redirect_to_diagnosis",
+        "handoff_unavailable",
+    ] = "clarify_scene"
+    scene_action: Literal["keep", "set", "replace", "clear"] = "keep"
+    scene: Scene = Field(default_factory=Scene, description="本轮确认或候选的业务场景")
+    reply: str = Field(default="", description="直接展示给用户的自然语言回复")
+    suggested_replies: List[str] = Field(default_factory=list, description="用户可选的简短回复")
+    reason: str = Field(default="", exclude=True, description="仅供日志与调试使用的简短决策理由")
 
 
 class MetricValue(BaseModel):
@@ -113,7 +130,7 @@ class ToolInvocationSummary(BaseModel):
     error_type: Optional[str] = None
 
 
-class ConversationTurnOutput(BaseModel):
+class ConversationTurnOutput(ConversationDecision):
     """Merged output of chat_extract + agent_reply in a single LLM call.
 
     One call handles: fact extraction, completeness evaluation, reply generation,
@@ -121,11 +138,6 @@ class ConversationTurnOutput(BaseModel):
     """
     new_facts: List[str] = Field(default_factory=list, description="新提取的运营事实")
     completeness: CompletenessEval = Field(default_factory=CompletenessEval, description="信息完备度评估")
-    reply: str = Field(description="对话回复文本")
-    suggested_replies: List[str] = Field(
-        default_factory=list,
-        description="预测用户可能回复的选项（3-10个）",
-    )
     citations: List[ConversationCitation] = Field(default_factory=list)
     tool_invocations: List[ToolInvocationSummary] = Field(default_factory=list)
     # Retained only in LangGraph state. API persistence uses the verified

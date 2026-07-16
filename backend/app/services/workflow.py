@@ -45,6 +45,7 @@ class AgentState(TypedDict, total=False):
     """State shared across all workflow nodes."""
     messages: List[Dict[str, Any]]
     user_scene: Dict[str, str]
+    scene_decision: Dict[str, Any]
     raw_facts: List[str]
     completeness: Dict[str, Any]        # serialized CompletenessEval
     diagnosis_result: str
@@ -73,6 +74,7 @@ def make_initial_state(user_message: str, existing_messages: list = None) -> dic
     return {
         "messages": messages,
         "user_scene": {},
+        "scene_decision": {},
         "raw_facts": [],
         "completeness": {},
         "diagnosis_result": "",
@@ -91,6 +93,33 @@ def make_initial_state(user_message: str, existing_messages: list = None) -> dic
 # =============================================================================
 # Node Implementations
 # =============================================================================
+
+_SCENE_FIELDS = ("industry", "sub_industry", "business_mode", "operating_stage")
+
+
+def _apply_scene_action(
+    current_scene: Dict[str, str],
+    action: str,
+    candidate_scene: Dict[str, str],
+) -> Dict[str, str]:
+    """Apply an LLM scene update without accepting partial or invalid switches."""
+    current = {
+        field: str(current_scene.get(field) or "")
+        for field in _SCENE_FIELDS
+        if current_scene.get(field)
+    }
+    candidate = {
+        field: str(candidate_scene.get(field) or "")
+        for field in _SCENE_FIELDS
+        if candidate_scene.get(field)
+    }
+    if action == "clear":
+        return {}
+    if action == "replace":
+        return candidate if candidate.get("industry") else current
+    if action == "set":
+        return {**current, **candidate}
+    return current
 
 def _make_scene_recognize(model: DiagnosisModel):
     """Node 1: Scene recognition — identify industry, stage.
@@ -112,10 +141,28 @@ def _make_scene_recognize(model: DiagnosisModel):
         # Use the full user dialogue as context (last 5 messages max)
         context = "\n".join(user_msgs[-5:])
 
-        scene = await model.recognize_scene(context)
-        logger.info("Scene recognized: industry=%s", scene.industry)
+        decision = await model.recognize_scene(context)
+        user_scene = _apply_scene_action(
+            state.get("user_scene", {}),
+            decision.scene_action,
+            decision.scene.model_dump(),
+        )
+        if decision.decision == "continue_diagnosis" and not user_scene.get("industry"):
+            decision = decision.model_copy(update={
+                "decision": "clarify_scene",
+                "scene_action": "keep",
+                "reply": decision.reply or "为了更好地帮你诊断，你目前主要经营什么业务？",
+            })
+        logger.info(
+            "Scene decision: decision=%s action=%s industry=%s reason=%s",
+            decision.decision,
+            decision.scene_action,
+            user_scene.get("industry", ""),
+            decision.reason,
+        )
         return {
-            "user_scene": scene.model_dump(),
+            "user_scene": user_scene,
+            "scene_decision": decision.model_dump(),
             "stage": "scene_recognize",
         }
 
@@ -130,10 +177,12 @@ def _make_greeting_guide(model: DiagnosisModel):
         logger.info("Node: greeting_guide")
         messages = state.get("messages", [])
 
-        user_msgs = [m for m in messages if m.get("role") == "user"]
-        last_user = user_msgs[-1]["content"] if user_msgs else "你好"
-
-        guide_text = await model.greeting_guide(last_user)
+        decision = state.get("scene_decision", {})
+        guide_text = str(decision.get("reply") or "")
+        if not guide_text:
+            user_msgs = [m for m in messages if m.get("role") == "user"]
+            last_user = user_msgs[-1]["content"] if user_msgs else "你好"
+            guide_text = await model.greeting_guide(last_user)
 
         messages = list(messages)
         messages.append({"role": "assistant", "content": guide_text})
@@ -141,6 +190,7 @@ def _make_greeting_guide(model: DiagnosisModel):
         return {
             "messages": messages,
             "pending_question": guide_text,
+            "suggested_replies": decision.get("suggested_replies", []),
             "stage": "greeting_guide",
         }
 
@@ -167,11 +217,22 @@ def _make_conversation_turn(model: DiagnosisModel):
             messages, existing_facts, scene,
         )
 
-        # Merge new facts with existing
-        all_facts = list(existing_facts)
-        for f in result.new_facts:
-            if f not in all_facts:
-                all_facts.append(f)
+        collects_diagnosis = result.decision == "continue_diagnosis"
+        scene_action = result.scene_action
+        if not collects_diagnosis and scene_action in {"set", "replace"}:
+            scene_action = "keep"
+        updated_scene = _apply_scene_action(
+            scene,
+            scene_action,
+            result.scene.model_dump(),
+        )
+
+        # A confirmed business switch starts a distinct diagnosis context.
+        all_facts = [] if scene_action == "replace" else list(existing_facts)
+        if collects_diagnosis:
+            for f in result.new_facts:
+                if f not in all_facts:
+                    all_facts.append(f)
 
         # Append assistant reply to messages
         messages_out = list(messages)
@@ -185,12 +246,24 @@ def _make_conversation_turn(model: DiagnosisModel):
 
         return {
             "messages": messages_out,
+            "user_scene": updated_scene,
+            "scene_decision": result.model_dump(),
             "raw_facts": all_facts,
-            "completeness": result.completeness.model_dump(),
+            "completeness": (
+                result.completeness.model_dump()
+                if collects_diagnosis
+                else state.get("completeness", {})
+            ),
             "pending_question": reply,
             "suggested_replies": result.suggested_replies or [],
-            "conversation_evidence": [citation.model_dump() for citation in result.tool_evidence],
-            "tool_invocations": [invocation.model_dump() for invocation in result.tool_invocations],
+            "conversation_evidence": (
+                [citation.model_dump() for citation in result.tool_evidence]
+                if collects_diagnosis else []
+            ),
+            "tool_invocations": (
+                [invocation.model_dump() for invocation in result.tool_invocations]
+                if collects_diagnosis else []
+            ),
             "stage": "conversation_turn",
         }
 
@@ -272,11 +345,15 @@ def _make_generate_report(model: DiagnosisModel):
 # =============================================================================
 
 def route_after_scene(state: dict) -> str:
-    """场景识别后路由：未识别到行业 → 引导问候；已识别 → 进入对话回合。"""
+    """Route the initial decision to a reply or the diagnosis conversation."""
     scene = state.get("user_scene", {})
-    if not scene or not scene.get("industry", ""):
-        return "greeting_guide"
-    return "conversation_turn"
+    decision_state = state.get("scene_decision", {})
+    decision = decision_state.get("decision") if decision_state else (
+        "continue_diagnosis" if scene.get("industry", "") else "clarify_scene"
+    )
+    if decision == "continue_diagnosis" and scene.get("industry", ""):
+        return "conversation_turn"
+    return "greeting_guide"
 
 
 def route_after_await(state: dict) -> str:

@@ -26,7 +26,9 @@ async def test_recognize_scene_logs_request_and_response(caplog):
 
     result = await model.recognize_scene("我在经营一家餐厅")
 
-    assert result.industry == "餐饮"
+    assert result.decision == "continue_diagnosis"
+    assert result.scene_action == "set"
+    assert result.scene.industry == "餐饮"
     assert "[scene_recognize 场景识别] LLM JSON request" in caplog.text
     assert "我在经营一家餐厅" in caplog.text
     assert "[scene_recognize 场景识别] LLM JSON response" in caplog.text

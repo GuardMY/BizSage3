@@ -5,7 +5,7 @@ from typing import Dict, List
 
 import pytest
 
-from app.domain.schemas import Scene, CompletenessEval, ConversationTurnOutput
+from app.domain.schemas import Scene, ConversationDecision, CompletenessEval, ConversationTurnOutput
 from app.services.model_service import DiagnosisModel
 
 
@@ -25,13 +25,22 @@ class MockDiagnosisModel(DiagnosisModel):
         (re.compile(r"教育|培训|知识付费|在线教育|课程"), "教育"),
     ]
 
-    async def recognize_scene(self, user_message: str) -> Scene:
+    async def recognize_scene(self, user_message: str) -> ConversationDecision:
         industry = ""
         for pattern, label in self.INDUSTRY_PATTERNS:
             if pattern.search(user_message):
                 industry = label
                 break
-        return Scene(industry=industry)
+        if industry:
+            return ConversationDecision(
+                decision="continue_diagnosis",
+                scene_action="set",
+                scene=Scene(industry=industry),
+            )
+        return ConversationDecision(
+            decision="clarify_scene",
+            reply="我可以帮你做运营诊断。你目前主要经营什么业务？",
+        )
 
     async def greeting_guide(self, user_message: str) -> str:
         return (
@@ -86,6 +95,8 @@ class MockDiagnosisModel(DiagnosisModel):
         suggested = [next_q[:15]] if next_q else []
 
         return ConversationTurnOutput(
+            decision="continue_diagnosis",
+            scene_action="keep",
             new_facts=new_facts,
             completeness=completeness,
             reply=reply,
