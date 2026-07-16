@@ -565,7 +565,6 @@ class KnowledgeRetrievalService:
                 raise
             return []
         if not recalled:
-            await self._audit_retrieval(query, scene, [])
             return []
 
         chunk_ids = [chunk_id for chunk_id, _ in recalled]
@@ -610,30 +609,7 @@ class KnowledgeRetrievalService:
             )))
         ranked.sort(key=lambda item: item[0], reverse=True)
         selected = [item[1] for item in ranked[:limit]]
-        await self._audit_retrieval(query, scene, selected)
         return selected
-
-    async def _audit_retrieval(
-        self,
-        query: str,
-        scene: dict[str, str],
-        evidence: list[EvidenceContext],
-    ) -> None:
-        try:
-            async with self._session_factory() as db:
-                db.add(KnowledgeAuditEvent(
-                    event_type="knowledge_retrieved",
-                    actor_role="system",
-                    detail={
-                        "query": query[:2000],
-                        "scene": scene,
-                        "version_ids": [item.version_id for item in evidence],
-                        "chunk_ids": [item.chunk_id for item in evidence],
-                    },
-                ))
-                await db.commit()
-        except Exception:
-            logger.exception("Failed to write knowledge retrieval audit event")
 
 
 _CITATION_PATTERN = re.compile(r"\[证据\s*(\d+)\]")

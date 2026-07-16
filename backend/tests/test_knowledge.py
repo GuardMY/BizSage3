@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models import (
     Base,
+    KnowledgeAuditEvent,
     KnowledgeChunk,
     KnowledgeDocument,
     KnowledgeDocumentVersion,
@@ -18,6 +19,7 @@ from app.repository import SessionRepository
 from app.services.knowledge import (
     EvidenceContext,
     KnowledgeIngestionManager,
+    KnowledgeRetrievalService,
     evidence_from_state,
     evidence_to_state,
     persist_report_evidences,
@@ -45,6 +47,11 @@ class FakeVectorIndex:
     async def upsert_chunks(self, chunks, vectors, version) -> None:
         assert len(chunks) == len(vectors)
         self.indexed.append((version.id, len(chunks)))
+
+
+class EmptyVectorIndex:
+    async def search(self, vector, scene, limit):
+        return []
 
 
 def test_evidence_state_is_json_checkpoint_safe():
@@ -118,6 +125,23 @@ async def test_ingestion_creates_reviewable_chunks(knowledge_db_factory):
     assert job.state == "completed"
     assert chunks and "曝光到下单" in chunks[0].content
     assert vectors.indexed == [(version_id, len(chunks))]
+
+
+@pytest.mark.asyncio
+async def test_retrieval_does_not_write_audit_event(knowledge_db_factory):
+    service = KnowledgeRetrievalService(
+        vector_index=EmptyVectorIndex(),
+        embedding_service=FakeEmbedder(),
+        session_factory=knowledge_db_factory,
+    )
+    service._ready = True
+
+    assert await service.retrieve("机械制造业关键指标", {"industry": "机械制造业"}) == []
+
+    async with knowledge_db_factory() as db:
+        events = list((await db.execute(select(KnowledgeAuditEvent))).scalars().all())
+
+    assert events == []
 
 
 @pytest.mark.asyncio
