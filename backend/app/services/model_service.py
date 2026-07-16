@@ -170,9 +170,6 @@ class OpenAICompatibleModel(DiagnosisModel):
         """
         system = """你是运营诊断场景识别专家。根据用户对话内容识别其所在行业。
 
-行业命名规则：尽量具体，如"火锅""茶饮""SaaS""服装零售"，不要用笼统大类。
-如果无法确定行业，industry 填空字符串。
-
 请严格按照 JSON 格式输出，不要包含 markdown 代码块标记：
 {"industry": "识别到的行业名称", "sub_industry": "子行业或品类", "business_mode": "业务模式", "operating_stage": "经营阶段"}
 
