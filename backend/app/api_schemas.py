@@ -87,18 +87,3 @@ class ReportGenerationResponse(BaseModel):
     """Accepted background report generation request."""
     session_id: str
     status: str = "generating"
-
-
-# =============================================================================
-# SSE Event Types (for documentation)
-# =============================================================================
-
-class SSEStageEvent(BaseModel):
-    """Emitted when the workflow stage changes."""
-    stage: str
-    label: str
-
-
-class SSEErrorEvent(BaseModel):
-    """Emitted on error."""
-    message: str

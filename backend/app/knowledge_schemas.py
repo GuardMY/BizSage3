@@ -68,8 +68,3 @@ class ReportEvidenceResponse(BaseModel):
     quote: str
     locator: dict[str, Any] = Field(default_factory=dict)
     retrieved_at: datetime
-
-
-class PreviewResponse(BaseModel):
-    content: str
-    locator: dict[str, Any] = Field(default_factory=dict)

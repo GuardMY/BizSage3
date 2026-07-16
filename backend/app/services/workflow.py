@@ -368,11 +368,6 @@ def route_after_await(state: dict) -> str:
     return "conversation_turn"
 
 
-def route_after_greeting(state: dict) -> str:
-    """引导问候后路由：进入等待用户输入。"""
-    return "await_input"
-
-
 # =============================================================================
 # Graph Builder
 # =============================================================================

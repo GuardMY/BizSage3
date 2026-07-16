@@ -23,8 +23,6 @@ from app.domain.schemas import (
     Scene,
     ConversationDecision,
     CompletenessEval,
-    ChatExtractOutput,
-    AgentReplyOutput,
     ConversationCitation,
     ConversationTurnOutput,
 )
@@ -123,15 +121,6 @@ class DiagnosisModel(ABC):
 
         Merges the old chat_extract and agent_reply into one LLM call.
         """
-        ...
-
-    @abstractmethod
-    async def diagnose(
-        self,
-        raw_facts: List[str],
-        scene: Dict[str, str],
-    ) -> str:
-        """Run diagnosis analysis based on collected facts."""
         ...
 
     @abstractmethod
@@ -385,40 +374,6 @@ class OpenAICompatibleModel(DiagnosisModel):
                 reply="⚠️ 抱歉，当前 AI 服务暂时不可用，无法生成动态回复。请稍后重试，或联系管理员检查模型服务状态。",
                 suggested_replies=[],
             )
-
-    # ─── Diagnose ───────────────────────────────────────────────────────
-
-    async def diagnose(
-        self,
-        raw_facts: List[str],
-        scene: Dict[str, str],
-    ) -> str:
-        industry = scene.get("industry", "未知行业")
-        facts_text = "\n".join(f"- {f}" for f in raw_facts) if raw_facts else "（暂无运营数据）"
-
-        system = f"""你是{industry}行业的资深运营诊断专家。
-
-请基于下列运营事实，自行选择适合{industry}行业的分析维度做诊断（可以是流量、转化、用户、产品、成本、运营动作等维度中与已有数据相关的部分，不必面面俱到）。
-
-【已有运营事实】
-{facts_text}
-
-要求：
-1. 只基于已有事实分析，不编造数据
-2. 有多少信息就分析多少维度，没有覆盖到的方向标为"信息不足"
-3. 每个维度的分析包括：现状判断 → 可能原因 → 优化建议
-4. 用{industry}从业者熟悉的语言
-
-直接输出分析文本，不要JSON。"""
-
-        try:
-            return await self._invoke_chat(
-                system,
-                "请基于以上事实做运营诊断分析",
-                node_name="diagnose 运营诊断",
-            )
-        except Exception:
-            return "⚠️ 抱歉，当前 AI 服务暂时不可用，无法完成诊断分析。请稍后重试，或联系管理员检查模型服务状态。"
 
     # ─── Generate Report ────────────────────────────────────────────────
 

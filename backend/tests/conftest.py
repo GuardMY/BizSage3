@@ -103,16 +103,6 @@ class MockDiagnosisModel(DiagnosisModel):
             suggested_replies=suggested,
         )
 
-    async def diagnose(self, raw_facts, scene) -> str:
-        industry = scene.get("industry", "未知行业")
-        facts_text = "\n".join(f"- {f}" for f in raw_facts) if raw_facts else "暂无数据"
-        return (
-            f"## {industry}运营诊断\n\n"
-            f"基于{len(raw_facts)}条事实分析：\n\n{facts_text}\n\n"
-            f"### 整体判断\n数据有限，初步判断运营状况需进一步了解。\n\n"
-            f"### 建议\n继续补充运营信息以获得更全面的诊断。\n"
-        )
-
     async def generate_report(
         self,
         raw_facts: List[str],

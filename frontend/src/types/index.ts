@@ -295,21 +295,3 @@ export type DiagnosisAction =
   | { type: "SET_REPORTS"; payload: { reports: ReportResponse[] } }
   | { type: "SET_ERROR"; payload: { error: string } }
   | { type: "RESET" };
-
-// ─── Utility ───────────────────────────────────────────────────────────
-
-export interface StageLabels {
-  [key: string]: string;
-}
-
-export const STAGE_LABELS: StageLabels = {
-  init: "初始化",
-  scene_recognize: "识别行业场景...",
-  retrieve_industry_knowledge: "检索行业资料...",
-  greeting_guide: "自我介绍...",
-  conversation_turn: "分析并回复...",
-  chat_extract: "分析对话...",
-  agent_reply: "思考中...",
-  await_input: "等待您的回复",
-  generate_report: "生成诊断报告...",
-};
