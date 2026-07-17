@@ -802,6 +802,17 @@ class KnowledgeIngestionService:
                     actor_role="system",
                     detail={"parser": parsed.parser, "chunk_count": len(chunks)},
                 ))
+                document = await db.get(KnowledgeDocument, current_version.document_id)
+                if document is not None and document.managed_source_key:
+                    from app.services.industry_catalog import mark_catalog_item_finished
+                    from app.services.knowledge_lifecycle import publish_version
+
+                    await publish_version(db, current_version, actor_role="system")
+                    await mark_catalog_item_finished(
+                        db,
+                        current_job.id,
+                        state="published",
+                    )
                 await db.commit()
             logger.info("Knowledge ingestion completed: job_id=%s version_id=%s", job.id, version.id)
             return True
@@ -862,6 +873,9 @@ class KnowledgeIngestionService:
                 await db.commit()
                 return None
             version.status = "parsing"
+            from app.services.industry_catalog import mark_catalog_item_running
+
+            await mark_catalog_item_running(db, job_id)
             await db.commit()
             return version, job, int(row.retry_count) + 1
 
@@ -894,6 +908,15 @@ class KnowledgeIngestionService:
                     actor_role="system",
                     detail={"error": error[:500], "will_retry": retrying},
                 ))
+            from app.services.industry_catalog import mark_catalog_item_finished
+
+            await mark_catalog_item_finished(
+                db,
+                job.id,
+                state="failed",
+                error=error,
+                retrying=retrying,
+            )
             await db.commit()
 
 

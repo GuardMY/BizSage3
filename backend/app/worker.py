@@ -13,6 +13,7 @@ from sqlalchemy import select, update
 from app.config import settings
 from app.db import async_session_factory, engine
 from app.models import (
+    KnowledgeCatalogSyncRun,
     KnowledgeIngestionJob,
     KnowledgeVectorSyncJob,
     ReportGenerationJob,
@@ -24,6 +25,7 @@ from app.services.knowledge import (
     knowledge_vector_index,
     knowledge_vector_sync_service,
 )
+from app.services.industry_catalog import industry_catalog_sync_service
 from app.services.report_service import report_job_service
 
 
@@ -62,6 +64,18 @@ async def run_knowledge_ingestion_job(ctx: dict, job_id: str) -> bool:
 
 async def run_knowledge_vector_sync_job(ctx: dict, job_id: str) -> bool:
     return await knowledge_vector_sync_service.run(job_id, worker_id=ctx["worker_id"])
+
+
+async def run_industry_catalog_sync_job(ctx: dict, run_id: str) -> bool:
+    job_ids = await industry_catalog_sync_service.run(run_id, worker_id=ctx["worker_id"])
+    for job_id in job_ids:
+        await ctx["redis"].enqueue_job(
+            "run_knowledge_ingestion_job",
+            job_id,
+            _job_id=f"knowledge-ingestion:{job_id}",
+            _queue_name=settings.knowledge_queue_name,
+        )
+    return True
 
 
 async def reconcile_report_jobs(ctx: dict) -> None:
@@ -107,11 +121,24 @@ async def reconcile_knowledge_jobs(ctx: dict) -> None:
             )
             .values(state="queued", worker_id=None, error="Worker lease expired")
         )
+        await db.execute(
+            update(KnowledgeCatalogSyncRun)
+            .where(
+                KnowledgeCatalogSyncRun.state == "scanning",
+                KnowledgeCatalogSyncRun.started_at < cutoff,
+            )
+            .values(state="queued", worker_id=None, error="Worker lease expired")
+        )
         ingestion_ids = list((await db.execute(
             select(KnowledgeIngestionJob.id).where(KnowledgeIngestionJob.state == "queued")
         )).scalars().all())
         sync_ids = list((await db.execute(
             select(KnowledgeVectorSyncJob.id).where(KnowledgeVectorSyncJob.state == "queued")
+        )).scalars().all())
+        catalog_run_ids = list((await db.execute(
+            select(KnowledgeCatalogSyncRun.id).where(
+                KnowledgeCatalogSyncRun.state == "queued"
+            )
         )).scalars().all())
         await db.commit()
     for job_id in ingestion_ids:
@@ -126,6 +153,13 @@ async def reconcile_knowledge_jobs(ctx: dict) -> None:
             "run_knowledge_vector_sync_job",
             job_id,
             _job_id=f"knowledge-vector-sync:{job_id}",
+            _queue_name=settings.knowledge_queue_name,
+        )
+    for run_id in catalog_run_ids:
+        await ctx["redis"].enqueue_job(
+            "run_industry_catalog_sync_job",
+            run_id,
+            _job_id=f"industry-catalog-sync:{run_id}",
             _queue_name=settings.knowledge_queue_name,
         )
 
@@ -144,7 +178,11 @@ class ReportWorkerSettings:
 
 
 class KnowledgeWorkerSettings:
-    functions = [run_knowledge_ingestion_job, run_knowledge_vector_sync_job]
+    functions = [
+        run_knowledge_ingestion_job,
+        run_knowledge_vector_sync_job,
+        run_industry_catalog_sync_job,
+    ]
     cron_jobs = [cron(reconcile_knowledge_jobs, second={0, 30}, run_at_startup=True)]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     queue_name = settings.knowledge_queue_name

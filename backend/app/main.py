@@ -1,5 +1,6 @@
 """FastAPI application factory with lifespan management."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -17,6 +18,7 @@ from app.services.knowledge import (
     knowledge_storage,
 )
 from app.services.coordination import session_lock_manager
+from app.services.industry_catalog import industry_catalog_sync_service
 from app.services.task_queue import task_queue
 from app.services.workflow import workflow_manager
 
@@ -25,6 +27,19 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+
+logger = logging.getLogger(__name__)
+
+
+async def _request_startup_catalog_sync() -> None:
+    if not settings.industry_catalog_sync_on_startup:
+        return
+    try:
+        run, created = await industry_catalog_sync_service.request_run("startup")
+        if created:
+            await task_queue.enqueue_catalog_sync(run.id)
+    except Exception:
+        logger.exception("Failed to request startup industry catalog synchronization")
 
 
 @asynccontextmanager
@@ -35,9 +50,16 @@ async def lifespan(app: FastAPI):
     await session_lock_manager.startup()
     await task_queue.startup()
     await workflow_manager.startup()
+    catalog_sync_task = asyncio.create_task(
+        _request_startup_catalog_sync(),
+        name="startup-industry-catalog-sync",
+    )
 
     yield
 
+    if not catalog_sync_task.done():
+        catalog_sync_task.cancel()
+    await asyncio.gather(catalog_sync_task, return_exceptions=True)
     await knowledge_retrieval_service.shutdown()
     await workflow_manager.shutdown()
     await task_queue.shutdown()

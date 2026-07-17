@@ -152,6 +152,7 @@ class KnowledgeDocument(Base):
 
     id = Column(String, primary_key=True, default=_new_id)
     title = Column(String(240), nullable=False)
+    managed_source_key = Column(String(512), nullable=True, unique=True, index=True)
     current_version_id = Column(String, nullable=True, index=True)
     status = Column(String(32), nullable=False, default="draft", index=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
@@ -283,6 +284,64 @@ class KnowledgeVectorSyncJob(Base):
     finished_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+
+class KnowledgeCatalogSyncRun(Base):
+    """One durable reconciliation of repository-managed industry documents."""
+
+    __tablename__ = "knowledge_catalog_sync_runs"
+
+    id = Column(String, primary_key=True, default=_new_id)
+    trigger = Column(String(32), nullable=False)
+    state = Column(String(32), nullable=False, default="queued", index=True)
+    active_key = Column(String(64), nullable=True, unique=True)
+    source_keys = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
+    worker_id = Column(String(128), nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+    items = relationship(
+        "KnowledgeCatalogSyncItem",
+        back_populates="run",
+        order_by="KnowledgeCatalogSyncItem.source_key",
+        cascade="all, delete-orphan",
+    )
+
+
+class KnowledgeCatalogSyncItem(Base):
+    """Per-file progress and diagnostics for a catalog synchronization run."""
+
+    __tablename__ = "knowledge_catalog_sync_items"
+    __table_args__ = (
+        UniqueConstraint("run_id", "source_key", name="uq_knowledge_catalog_sync_item_source"),
+    )
+
+    id = Column(String, primary_key=True, default=_new_id)
+    run_id = Column(
+        String,
+        ForeignKey("knowledge_catalog_sync_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_key = Column(String(512), nullable=False)
+    filename = Column(String(255), nullable=False)
+    sha256 = Column(String(64), nullable=True)
+    action = Column(String(32), nullable=False)
+    state = Column(String(32), nullable=False, default="queued", index=True)
+    document_id = Column(String, nullable=True, index=True)
+    version_id = Column(String, nullable=True, index=True)
+    ingestion_job_id = Column(String, nullable=True, index=True)
+    error = Column(Text, nullable=True)
+    retry_count = Column(Integer, nullable=False, default=0)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+    run = relationship("KnowledgeCatalogSyncRun", back_populates="items")
 
 
 class ReportEvidence(Base):

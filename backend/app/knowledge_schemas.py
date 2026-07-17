@@ -49,11 +49,47 @@ class KnowledgeVersionResponse(BaseModel):
 class KnowledgeDocumentResponse(BaseModel):
     id: str
     title: str
+    managed_source_key: str | None = None
     current_version_id: str | None = None
     status: str
     created_at: datetime
     updated_at: datetime
     versions: list[KnowledgeVersionResponse] = Field(default_factory=list)
+
+
+class KnowledgeCatalogSyncItemResponse(BaseModel):
+    id: str
+    source_key: str
+    filename: str
+    sha256: str | None = None
+    action: str
+    state: str
+    document_id: str | None = None
+    version_id: str | None = None
+    error: str | None = None
+    retry_count: int
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class KnowledgeCatalogSyncRunResponse(BaseModel):
+    id: str
+    trigger: str
+    state: str
+    error: str | None = None
+    total_count: int
+    pending_count: int
+    processing_count: int
+    published_count: int
+    skipped_count: int
+    failed_count: int
+    revoked_count: int
+    progress_percent: int
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    items: list[KnowledgeCatalogSyncItemResponse] = Field(default_factory=list)
 
 
 class ReportEvidenceResponse(BaseModel):

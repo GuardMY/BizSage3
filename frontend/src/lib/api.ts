@@ -19,6 +19,7 @@ import type {
   TemporaryAccessToken,
   CreatedTemporaryAccessToken,
   KnowledgeDocument,
+  KnowledgeCatalogSyncRun,
   KnowledgeSourceType,
   KnowledgeVersion,
   ReportEvidence,
@@ -188,6 +189,26 @@ export async function retryKnowledgeIngestion(versionId: string): Promise<Knowle
     { method: "POST" },
   );
   return handleResponse<KnowledgeVersion>(res);
+}
+
+export async function getLatestIndustrySync(): Promise<KnowledgeCatalogSyncRun | null> {
+  const res = await request(`${apiBase()}/admin/knowledge/industry-sync/latest`);
+  return handleResponse<KnowledgeCatalogSyncRun | null>(res);
+}
+
+export async function startIndustrySync(): Promise<KnowledgeCatalogSyncRun> {
+  const res = await request(`${apiBase()}/admin/knowledge/industry-sync`, {
+    method: "POST",
+  });
+  return handleResponse<KnowledgeCatalogSyncRun>(res);
+}
+
+export async function retryFailedIndustrySync(runId: string): Promise<KnowledgeCatalogSyncRun> {
+  const res = await request(
+    `${apiBase()}/admin/knowledge/industry-sync/${encodeURIComponent(runId)}/retry-failed`,
+    { method: "POST" },
+  );
+  return handleResponse<KnowledgeCatalogSyncRun>(res);
 }
 
 export function getKnowledgePreviewUrl(documentId: string, versionId: string): string {

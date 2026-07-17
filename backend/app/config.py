@@ -1,5 +1,7 @@
 """Application configuration loaded from environment variables."""
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
 
 
@@ -49,6 +51,10 @@ class Settings(BaseSettings):
     minio_secure: bool = False
     minio_bucket: str = "bizsage-knowledge"
     knowledge_upload_max_bytes: int = 20 * 1024 * 1024
+    industry_catalog_dir: str = str(
+        Path(__file__).resolve().parents[2] / "docs" / "industry"
+    )
+    industry_catalog_sync_on_startup: bool = True
 
     # Public web search. Providers stay disabled until explicitly enabled and
     # configured, so a missing credential never blocks a conversation.

@@ -7,6 +7,7 @@ x-backend-environment: &backend-environment
   MINIO_ENDPOINT: minio:9000
   MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-bizsage-minio}
   MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-replace-this-minio-password}
+  INDUSTRY_CATALOG_DIR: /app/docs/industry
 
 x-backend-build: &backend-build
   context: ./backend
@@ -116,6 +117,8 @@ services:
       <<: *backend-environment
       DB_APPLICATION_NAME: bizsage-knowledge-worker
     command: ["arq", "app.worker.KnowledgeWorkerSettings"]
+    volumes:
+      - ./docs/industry:/app/docs/industry:ro
     depends_on:
       migrate:
         condition: service_completed_successfully

@@ -49,6 +49,15 @@ class TaskQueue:
             _queue_name=settings.knowledge_queue_name,
         )
 
+    async def enqueue_catalog_sync(self, run_id: str) -> None:
+        redis = await self._pool()
+        await redis.enqueue_job(
+            "run_industry_catalog_sync_job",
+            run_id,
+            _job_id=f"industry-catalog-sync:{run_id}",
+            _queue_name=settings.knowledge_queue_name,
+        )
+
     async def ping(self) -> bool:
         if self._redis is None:
             return False

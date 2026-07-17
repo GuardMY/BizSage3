@@ -16,6 +16,8 @@ from sqlalchemy.orm import selectinload
 from app.auth import Principal, get_current_principal, require_admin
 from app.db import get_session as get_db_session
 from app.knowledge_schemas import (
+    KnowledgeCatalogSyncItemResponse,
+    KnowledgeCatalogSyncRunResponse,
     KnowledgeDocumentResponse,
     KnowledgeIngestionJobResponse,
     KnowledgeVersionResponse,
@@ -24,11 +26,11 @@ from app.knowledge_schemas import (
 )
 from app.models import (
     DiagnosisSession,
+    KnowledgeCatalogSyncRun,
     KnowledgeAuditEvent,
     KnowledgeDocument,
     KnowledgeDocumentVersion,
     KnowledgeIngestionJob,
-    KnowledgeVectorSyncJob,
     Report,
     ReportEvidence,
 )
@@ -44,6 +46,8 @@ from app.services.knowledge import (
     storage_key_for,
     utcnow,
 )
+from app.services.industry_catalog import industry_catalog_sync_service
+from app.services.knowledge_lifecycle import publish_version, revoke_version
 from app.services.task_queue import task_queue
 
 logger = logging.getLogger(__name__)
@@ -104,11 +108,54 @@ def _document_response(document: KnowledgeDocument) -> KnowledgeDocumentResponse
     return KnowledgeDocumentResponse(
         id=document.id,
         title=document.title,
+        managed_source_key=document.managed_source_key,
         current_version_id=document.current_version_id,
         status=document.status,
         created_at=document.created_at,
         updated_at=document.updated_at,
         versions=[_version_response(version) for version in (document.versions or [])],
+    )
+
+
+def _catalog_sync_response(run: KnowledgeCatalogSyncRun) -> KnowledgeCatalogSyncRunResponse:
+    items = list(run.items or [])
+    counts = {
+        state: sum(item.state == state for item in items)
+        for state in ("queued", "running", "published", "skipped", "failed", "revoked")
+    }
+    completed = sum(counts[state] for state in ("published", "skipped", "failed", "revoked"))
+    total = len(items)
+    return KnowledgeCatalogSyncRunResponse(
+        id=run.id,
+        trigger=run.trigger,
+        state=run.state,
+        error=run.error,
+        total_count=total,
+        pending_count=counts["queued"],
+        processing_count=counts["running"],
+        published_count=counts["published"],
+        skipped_count=counts["skipped"],
+        failed_count=counts["failed"],
+        revoked_count=counts["revoked"],
+        progress_percent=100 if run.state == "completed" and total == 0 else round(completed * 100 / max(total, 1)),
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        created_at=run.created_at,
+        updated_at=run.updated_at,
+        items=[KnowledgeCatalogSyncItemResponse(
+            id=item.id,
+            source_key=item.source_key,
+            filename=item.filename,
+            sha256=item.sha256,
+            action=item.action,
+            state=item.state,
+            document_id=item.document_id,
+            version_id=item.version_id,
+            error=item.error,
+            retry_count=item.retry_count,
+            started_at=item.started_at,
+            finished_at=item.finished_at,
+        ) for item in items],
     )
 
 
@@ -206,6 +253,13 @@ async def _enqueue_vector_sync_jobs(job_ids: list[str]) -> None:
             logger.exception("Failed to enqueue knowledge vector sync job: %s", job_id)
 
 
+async def _enqueue_catalog_sync(run_id: str) -> None:
+    try:
+        await task_queue.enqueue_catalog_sync(run_id)
+    except Exception:
+        logger.exception("Failed to enqueue industry catalog sync: %s", run_id)
+
+
 async def _load_document(db: AsyncSession, document_id: str) -> KnowledgeDocument | None:
     result = await db.execute(
         select(KnowledgeDocument)
@@ -246,6 +300,68 @@ async def list_knowledge_documents(db: AsyncSession = Depends(get_db_session)):
         )
     )
     return [_document_response(document) for document in result.scalars().all()]
+
+
+async def _load_catalog_sync_run(
+    db: AsyncSession,
+    run_id: str,
+) -> KnowledgeCatalogSyncRun | None:
+    return (await db.execute(
+        select(KnowledgeCatalogSyncRun)
+        .where(KnowledgeCatalogSyncRun.id == run_id)
+        .options(selectinload(KnowledgeCatalogSyncRun.items))
+    )).scalar_one_or_none()
+
+
+@router.get(
+    "/admin/knowledge/industry-sync/latest",
+    response_model=KnowledgeCatalogSyncRunResponse | None,
+    dependencies=[Depends(require_admin)],
+)
+async def get_latest_industry_sync(db: AsyncSession = Depends(get_db_session)):
+    run = (await db.execute(
+        select(KnowledgeCatalogSyncRun)
+        .order_by(KnowledgeCatalogSyncRun.created_at.desc())
+        .limit(1)
+        .options(selectinload(KnowledgeCatalogSyncRun.items))
+    )).scalar_one_or_none()
+    return _catalog_sync_response(run) if run is not None else None
+
+
+@router.post(
+    "/admin/knowledge/industry-sync",
+    response_model=KnowledgeCatalogSyncRunResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_admin)],
+)
+async def start_industry_sync(db: AsyncSession = Depends(get_db_session)):
+    run, created = await industry_catalog_sync_service.request_run("manual")
+    if created:
+        await _enqueue_catalog_sync(run.id)
+    loaded = await _load_catalog_sync_run(db, run.id)
+    return _catalog_sync_response(loaded or run)
+
+
+@router.post(
+    "/admin/knowledge/industry-sync/{run_id}/retry-failed",
+    response_model=KnowledgeCatalogSyncRunResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_admin)],
+)
+async def retry_failed_industry_sync(
+    run_id: str,
+    db: AsyncSession = Depends(get_db_session),
+):
+    if await _load_catalog_sync_run(db, run_id) is None:
+        raise HTTPException(status_code=404, detail="同步批次不存在")
+    try:
+        run, created = await industry_catalog_sync_service.request_failed_retry(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if created:
+        await _enqueue_catalog_sync(run.id)
+    loaded = await _load_catalog_sync_run(db, run.id)
+    return _catalog_sync_response(loaded or run)
 
 
 @router.post(
@@ -311,6 +427,8 @@ async def create_knowledge_document_version(
     document = await _load_document(db, document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="资料不存在")
+    if document.managed_source_key:
+        raise HTTPException(status_code=409, detail="目录托管资料只能通过行业文档同步更新")
     await db.rollback()
     version = await _prepare_version(
         document_id=document_id,
@@ -360,6 +478,8 @@ async def retry_knowledge_ingestion(
     version = await _load_version(db, version_id)
     if version is None:
         raise HTTPException(status_code=404, detail="资料版本不存在")
+    if version.document.managed_source_key:
+        raise HTTPException(status_code=409, detail="目录托管资料请通过同步批次重试")
     if version.status not in {"draft", "parsing"}:
         raise HTTPException(status_code=409, detail="只有草稿或解析失败的版本可以重试")
     job = _latest_job(version)
@@ -394,46 +514,15 @@ async def publish_knowledge_version(
     version = await _load_version(db, version_id)
     if version is None:
         raise HTTPException(status_code=404, detail="资料版本不存在")
+    if version.document.managed_source_key:
+        raise HTTPException(status_code=409, detail="目录托管资料由系统自动发布")
     if version.status != "pending_review":
         raise HTTPException(status_code=409, detail="只有完成解析、等待审核的版本可以发布")
-    effective_from = _naive(body.effective_from)
-    prior_versions = list((await db.execute(
-        select(KnowledgeDocumentVersion).where(
-            KnowledgeDocumentVersion.document_id == version.document_id,
-            KnowledgeDocumentVersion.status == "published",
-            KnowledgeDocumentVersion.id != version.id,
-        )
-    )).scalars().all())
-    for prior in prior_versions:
-        prior.status = "superseded"
-        prior.effective_to = effective_from
-    version.status = "published"
-    version.effective_from = effective_from
-    version.effective_to = None
-    version.document.current_version_id = version.id
-    version.document.status = "published"
-    sync_jobs = [
-        KnowledgeVectorSyncJob(
-            id=uuid.uuid4().hex,
-            version_id=prior.id,
-            operation="delete",
-            state="queued",
-        )
-        for prior in prior_versions
-    ]
-    sync_jobs.append(KnowledgeVectorSyncJob(
-        id=uuid.uuid4().hex,
-        version_id=version.id,
-        operation="activate",
-        state="queued",
-    ))
-    db.add_all(sync_jobs)
-    _audit(
+    sync_jobs = await publish_version(
         db,
-        "version_published",
-        document_id=version.document_id,
-        version_id=version.id,
-        detail={"superseded_version_ids": [item.id for item in prior_versions]},
+        version,
+        effective_from=_naive(body.effective_from),
+        actor_role="admin",
     )
     await db.commit()
     await _enqueue_vector_sync_jobs([job.id for job in sync_jobs])
@@ -453,21 +542,11 @@ async def revoke_knowledge_version(
     version = await _load_version(db, version_id)
     if version is None:
         raise HTTPException(status_code=404, detail="资料版本不存在")
-    if version.status == "revoked":
+    if version.document.managed_source_key:
+        raise HTTPException(status_code=409, detail="目录托管资料请通过删除源文件后同步撤回")
+    sync_job = await revoke_version(db, version, actor_role="admin")
+    if sync_job is None:
         return None
-    version.status = "revoked"
-    version.effective_to = utcnow()
-    if version.document.current_version_id == version.id:
-        version.document.current_version_id = None
-        version.document.status = "revoked"
-    sync_job = KnowledgeVectorSyncJob(
-        id=uuid.uuid4().hex,
-        version_id=version.id,
-        operation="delete",
-        state="queued",
-    )
-    db.add(sync_job)
-    _audit(db, "version_revoked", document_id=version.document_id, version_id=version.id)
     await db.commit()
     await _enqueue_vector_sync_jobs([sync_job.id])
     return None

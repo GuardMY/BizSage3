@@ -73,9 +73,16 @@ def test_full_migration_chain_creates_fresh_database(tmp_path, monkeypatch):
         "report_generation_jobs",
         "knowledge_ingestion_jobs",
         "knowledge_vector_sync_jobs",
+        "knowledge_catalog_sync_runs",
+        "knowledge_catalog_sync_items",
     }.issubset(inspector.get_table_names())
     ingestion_columns = {
         column["name"]
         for column in inspector.get_columns("knowledge_ingestion_jobs")
     }
     assert {"worker_id", "started_at", "finished_at"}.issubset(ingestion_columns)
+    document_columns = {
+        column["name"]
+        for column in inspector.get_columns("knowledge_documents")
+    }
+    assert "managed_source_key" in document_columns

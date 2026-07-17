@@ -136,7 +136,7 @@ export interface KnowledgeVersion {
   content_type: string;
   source_type: KnowledgeSourceType;
   sha256: string;
-  status: "draft" | "parsing" | "pending_review" | "published" | "superseded" | "revoked";
+  status: "draft" | "parsing" | "indexing" | "pending_review" | "published" | "superseded" | "revoked";
   effective_from: string | null;
   effective_to: string | null;
   industry_tags: string[];
@@ -152,11 +152,55 @@ export interface KnowledgeVersion {
 export interface KnowledgeDocument {
   id: string;
   title: string;
+  managed_source_key: string | null;
   current_version_id: string | null;
   status: string;
   created_at: string;
   updated_at: string;
   versions: KnowledgeVersion[];
+}
+
+export type KnowledgeCatalogSyncItemState =
+  | "queued"
+  | "running"
+  | "published"
+  | "skipped"
+  | "failed"
+  | "revoked";
+
+export interface KnowledgeCatalogSyncItem {
+  id: string;
+  source_key: string;
+  filename: string;
+  sha256: string | null;
+  action: "scan" | "create" | "update" | "skip" | "revoke";
+  state: KnowledgeCatalogSyncItemState;
+  document_id: string | null;
+  version_id: string | null;
+  error: string | null;
+  retry_count: number;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface KnowledgeCatalogSyncRun {
+  id: string;
+  trigger: "startup" | "manual" | "retry";
+  state: "queued" | "scanning" | "running" | "completed" | "partial_failed" | "failed";
+  error: string | null;
+  total_count: number;
+  pending_count: number;
+  processing_count: number;
+  published_count: number;
+  skipped_count: number;
+  failed_count: number;
+  revoked_count: number;
+  progress_percent: number;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+  items: KnowledgeCatalogSyncItem[];
 }
 
 export interface ReportEvidence {
