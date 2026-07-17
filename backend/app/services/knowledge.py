@@ -7,7 +7,7 @@ import io
 import logging
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Any, Iterable
@@ -107,6 +107,10 @@ class EvidenceContext:
     query: str
     rank: int
     retrieved_at: datetime
+    semantic_score: float = 0.0
+    keyword_score: float = 0.0
+    source_weight: float = 0.0
+    combined_score: float = 0.0
 
 
 def evidence_to_state(evidence: EvidenceContext) -> dict[str, Any]:
@@ -123,6 +127,10 @@ def evidence_to_state(evidence: EvidenceContext) -> dict[str, Any]:
         "query": evidence.query,
         "rank": evidence.rank,
         "retrieved_at": evidence.retrieved_at.isoformat(),
+        "semantic_score": evidence.semantic_score,
+        "keyword_score": evidence.keyword_score,
+        "source_weight": evidence.source_weight,
+        "combined_score": evidence.combined_score,
     }
 
 
@@ -146,6 +154,10 @@ def evidence_from_state(values: Iterable[EvidenceContext | dict[str, Any]]) -> l
                 query=str(value["query"]),
                 rank=int(value["rank"]),
                 retrieved_at=datetime.fromisoformat(str(retrieved_at)),
+                semantic_score=float(value.get("semantic_score", 0)),
+                keyword_score=float(value.get("keyword_score", 0)),
+                source_weight=float(value.get("source_weight", 0)),
+                combined_score=float(value.get("combined_score", 0)),
             ))
         except (KeyError, TypeError, ValueError):
             logger.warning("Ignoring malformed evidence in graph state")
@@ -615,7 +627,8 @@ class KnowledgeRetrievalService:
                 continue
             text_terms = set(re.findall(r"[\w\u4e00-\u9fff]+", chunk.content.casefold()))
             keyword_score = len(query_terms & text_terms) / max(len(query_terms), 1)
-            score = semantic_score + keyword_score * 0.15 + source_weight.get(chunk.version.source_type, 0)
+            type_weight = source_weight.get(chunk.version.source_type, 0)
+            score = semantic_score + keyword_score * 0.15 + type_weight
             ranked.append((score, EvidenceContext(
                 chunk_id=chunk.id,
                 version_id=chunk.version.id,
@@ -628,9 +641,16 @@ class KnowledgeRetrievalService:
                 query=query,
                 rank=rank,
                 retrieved_at=now,
+                semantic_score=semantic_score,
+                keyword_score=keyword_score,
+                source_weight=type_weight,
+                combined_score=score,
             )))
         ranked.sort(key=lambda item: item[0], reverse=True)
-        selected = [item[1] for item in ranked[:limit]]
+        selected = [
+            replace(item[1], rank=rank)
+            for rank, item in enumerate(ranked[:limit], start=1)
+        ]
         return selected
 
 

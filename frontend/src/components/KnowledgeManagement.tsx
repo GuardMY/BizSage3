@@ -1,9 +1,9 @@
 "use client";
 
 import { FormEvent, type ReactNode, useCallback, useEffect, useState } from "react";
-import { AlertCircle, BookOpen, CheckCircle2, Database, FileUp, LoaderCircle, Play, RefreshCw, RotateCcw, Send, X } from "lucide-react";
+import { AlertCircle, BookOpen, CheckCircle2, Database, ExternalLink, FileUp, LoaderCircle, Play, RefreshCw, RotateCcw, Search, Send, X } from "lucide-react";
 import * as api from "@/lib/api";
-import type { KnowledgeCatalogSyncItem, KnowledgeCatalogSyncRun, KnowledgeDocument, KnowledgeSourceType, KnowledgeVersion } from "@/types";
+import type { KnowledgeCatalogSyncItem, KnowledgeCatalogSyncRun, KnowledgeDocument, KnowledgeSearchResult, KnowledgeSourceType, KnowledgeVersion } from "@/types";
 
 const SOURCE_TYPES: Array<{ value: KnowledgeSourceType; label: string }> = [
   { value: "methodology", label: "行业方法论" },
@@ -28,6 +28,12 @@ export default function KnowledgeManagement() {
   const [syncLoading, setSyncLoading] = useState(true);
   const [syncAction, setSyncAction] = useState<"start" | "retry" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchLimit, setSearchLimit] = useState(10);
+  const [searchResults, setSearchResults] = useState<KnowledgeSearchResult[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searched, setSearched] = useState(false);
 
   const loadDocuments = useCallback(async () => {
     setLoading(true);
@@ -140,6 +146,25 @@ export default function KnowledgeManagement() {
     }
   }
 
+  async function runSearch(event: FormEvent) {
+    event.preventDefault();
+    const query = searchQuery.trim();
+    if (!query || searchLoading) return;
+    const limit = Math.min(100, Math.max(1, Math.trunc(searchLimit || 10)));
+    setSearchLimit(limit);
+    setSearchLoading(true);
+    setSearchError(null);
+    setSearched(true);
+    try {
+      setSearchResults(await api.searchKnowledge(query, limit));
+    } catch (err) {
+      setSearchResults([]);
+      setSearchError(readableError(err));
+    } finally {
+      setSearchLoading(false);
+    }
+  }
+
   async function retryFailedSync() {
     if (!syncRun) return;
     setSyncAction("retry");
@@ -202,6 +227,66 @@ export default function KnowledgeManagement() {
       {error && <div role="alert" className="mt-6 border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
       <div className="mt-8 border-y border-gray-200 py-6">
+        <div className="flex items-center gap-2">
+          <Search className="h-4 w-4 text-gray-600" />
+          <h3 className="text-sm font-semibold">检索已发布知识</h3>
+        </div>
+        <form onSubmit={runSearch} className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_112px_auto] sm:items-end">
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-gray-700" htmlFor="knowledge-search-query">检索内容</label>
+            <input id="knowledge-search-query" type="search" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} maxLength={500} placeholder="输入方法论、规则、基准或 SOP" className="h-10 w-full rounded-md border border-gray-300 px-3 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-gray-700" htmlFor="knowledge-search-limit">结果条数</label>
+            <input id="knowledge-search-limit" type="number" min={1} max={100} value={searchLimit} onChange={(event) => setSearchLimit(Number(event.target.value))} onBlur={() => setSearchLimit(Math.min(100, Math.max(1, Math.trunc(searchLimit || 10))))} className="h-10 w-full rounded-md border border-gray-300 px-3 text-sm tabular-nums outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" />
+          </div>
+          <button type="submit" disabled={searchLoading || !searchQuery.trim()} className="flex h-10 items-center justify-center gap-2 rounded-md bg-gray-900 px-4 text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50">
+            {searchLoading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+            <span>{searchLoading ? "检索中..." : "检索"}</span>
+          </button>
+        </form>
+
+        {searchError && <div role="alert" className="mt-4 border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{searchError}</div>}
+        {searched && !searchLoading && !searchError && (
+          <div className="mt-6">
+            <p className="mb-3 text-xs text-gray-500">找到 {searchResults.length} 条相关内容</p>
+            {searchResults.length === 0 ? (
+              <div className="border border-gray-200 bg-white px-4 py-10 text-center text-sm text-gray-500">没有检索到相关知识</div>
+            ) : (
+              <ol className="divide-y divide-gray-200 border border-gray-200 bg-white">
+                {searchResults.map((result) => (
+                  <li key={result.chunk_id} className="px-4 py-5 sm:px-5">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs font-semibold tabular-nums text-gray-400">#{result.rank}</span>
+                          <h4 className="text-sm font-semibold text-gray-900">{result.document_title}</h4>
+                          <span className="rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">v{result.version_no}</span>
+                          <span className="rounded bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">{sourceTypeLabel(result.source_type)}</span>
+                        </div>
+                        {locatorLabel(result.locator) && <p className="mt-1 text-xs text-gray-400">{locatorLabel(result.locator)}</p>}
+                      </div>
+                      <a href={api.getKnowledgePreviewUrl(result.document_id, result.version_id)} target="_blank" rel="noreferrer" className="flex h-9 shrink-0 items-center gap-2 rounded-md border border-gray-300 px-3 text-xs font-medium text-gray-700 hover:bg-gray-50">
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        查看预览
+                      </a>
+                    </div>
+                    <p className="mt-3 line-clamp-4 whitespace-pre-wrap break-words text-sm leading-6 text-gray-700">{result.quote}</p>
+                    <div className="mt-4 grid grid-cols-2 border-y border-gray-100 sm:grid-cols-4">
+                      <ScoreMetric label="综合相关度" value={result.combined_score_percent} />
+                      <ScoreMetric label="语义相关度" value={result.semantic_score_percent} />
+                      <ScoreMetric label="关键词命中率" value={result.keyword_match_percent} />
+                      <ScoreMetric label="资料类型权重" value={result.source_weight_percent} prefix="+" />
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-8 border-b border-gray-200 pb-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
@@ -288,6 +373,32 @@ export default function KnowledgeManagement() {
 function TextInput({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (value: string) => void; placeholder: string }) {
   const id = `knowledge-${label}`;
   return <div><label className="mb-1.5 block text-sm font-medium text-gray-700" htmlFor={id}>{label}</label><input id={id} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="h-10 w-full rounded-md border border-gray-300 px-3 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" /></div>;
+}
+
+function ScoreMetric({ label, value, prefix = "" }: { label: string; value: number; prefix?: string }) {
+  return <div className="px-2 py-3 first:pl-0 sm:px-3"><p className="text-xs text-gray-400">{label}</p><p className="mt-1 text-sm font-semibold tabular-nums text-gray-800">{prefix}{formatPercent(value)}</p></div>;
+}
+
+function formatPercent(value: number): string {
+  return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}%`;
+}
+
+function locatorLabel(locator: Record<string, unknown>): string {
+  const parts: string[] = [];
+  if (Array.isArray(locator.heading_path)) {
+    const headings = locator.heading_path.filter((item): item is string => typeof item === "string" && Boolean(item));
+    if (headings.length > 0) parts.push(headings.join(" / "));
+  }
+  if (typeof locator.line_start === "number") {
+    const end = typeof locator.line_end === "number" ? locator.line_end : locator.line_start;
+    parts.push(locator.line_start === end ? `第 ${locator.line_start} 行` : `第 ${locator.line_start}–${end} 行`);
+  } else if (typeof locator.paragraph_start === "number") {
+    const end = typeof locator.paragraph_end === "number" ? locator.paragraph_end : locator.paragraph_start;
+    parts.push(locator.paragraph_start === end ? `第 ${locator.paragraph_start} 段` : `第 ${locator.paragraph_start}–${end} 段`);
+  } else if (typeof locator.table_no === "number") {
+    parts.push(`表格 ${locator.table_no}`);
+  }
+  return parts.join(" · ");
 }
 
 function isSyncActive(state: KnowledgeCatalogSyncRun["state"]): boolean {

@@ -160,6 +160,22 @@ export interface KnowledgeDocument {
   versions: KnowledgeVersion[];
 }
 
+export interface KnowledgeSearchResult {
+  chunk_id: string;
+  document_id: string;
+  version_id: string;
+  document_title: string;
+  source_type: KnowledgeSourceType;
+  version_no: number;
+  quote: string;
+  locator: Record<string, unknown>;
+  rank: number;
+  semantic_score_percent: number;
+  keyword_match_percent: number;
+  source_weight_percent: number;
+  combined_score_percent: number;
+}
+
 export type KnowledgeCatalogSyncItemState =
   | "queued"
   | "running"

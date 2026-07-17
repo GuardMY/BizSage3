@@ -19,6 +19,7 @@ import type {
   TemporaryAccessToken,
   CreatedTemporaryAccessToken,
   KnowledgeDocument,
+  KnowledgeSearchResult,
   KnowledgeCatalogSyncRun,
   KnowledgeSourceType,
   KnowledgeVersion,
@@ -146,6 +147,12 @@ function knowledgeForm(input: KnowledgeUploadInput, includeTitle: boolean): Form
 export async function listKnowledgeDocuments(): Promise<KnowledgeDocument[]> {
   const res = await request(`${apiBase()}/admin/knowledge/documents`);
   return handleResponse<KnowledgeDocument[]>(res);
+}
+
+export async function searchKnowledge(query: string, limit: number): Promise<KnowledgeSearchResult[]> {
+  const params = new URLSearchParams({ query, limit: String(limit) });
+  const res = await request(`${apiBase()}/admin/knowledge/search?${params.toString()}`);
+  return handleResponse<KnowledgeSearchResult[]>(res);
 }
 
 export async function createKnowledgeDocument(input: KnowledgeUploadInput): Promise<KnowledgeDocument> {

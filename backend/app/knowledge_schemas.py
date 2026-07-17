@@ -57,6 +57,22 @@ class KnowledgeDocumentResponse(BaseModel):
     versions: list[KnowledgeVersionResponse] = Field(default_factory=list)
 
 
+class KnowledgeSearchResultResponse(BaseModel):
+    chunk_id: str
+    document_id: str
+    version_id: str
+    document_title: str
+    source_type: KnowledgeSourceType
+    version_no: int
+    quote: str
+    locator: dict[str, Any] = Field(default_factory=dict)
+    rank: int
+    semantic_score_percent: float
+    keyword_match_percent: float
+    source_weight_percent: float
+    combined_score_percent: float
+
+
 class KnowledgeCatalogSyncItemResponse(BaseModel):
     id: str
     source_key: str

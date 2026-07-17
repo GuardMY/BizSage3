@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,7 @@ from app.knowledge_schemas import (
     KnowledgeCatalogSyncRunResponse,
     KnowledgeDocumentResponse,
     KnowledgeIngestionJobResponse,
+    KnowledgeSearchResultResponse,
     KnowledgeVersionResponse,
     PublishVersionRequest,
     ReportEvidenceResponse,
@@ -38,6 +39,7 @@ from app.services.knowledge import (
     SOURCE_TYPES,
     content_type_for,
     extension_for,
+    knowledge_retrieval_service,
     knowledge_storage,
     parse_document,
     parse_tags,
@@ -53,6 +55,10 @@ from app.services.task_queue import task_queue
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
+
+
+def _percent(value: float, *, maximum: float = 1.0) -> float:
+    return round(max(0.0, min(value / maximum, 1.0)) * 100, 1)
 
 
 def _naive(value: datetime | None) -> datetime:
@@ -283,6 +289,46 @@ async def _load_version(db: AsyncSession, version_id: str) -> KnowledgeDocumentV
         )
     )
     return result.scalar_one_or_none()
+
+
+@router.get(
+    "/admin/knowledge/search",
+    response_model=list[KnowledgeSearchResultResponse],
+    dependencies=[Depends(require_admin)],
+)
+async def search_knowledge(
+    query: Annotated[str, Query(min_length=1, max_length=500)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 10,
+):
+    normalized_query = query.strip()
+    if not normalized_query:
+        raise HTTPException(status_code=422, detail="检索内容不能为空")
+    try:
+        evidence = await knowledge_retrieval_service.retrieve(
+            normalized_query,
+            {},
+            limit=limit,
+            raise_on_error=True,
+        )
+    except Exception as exc:
+        logger.exception("Admin knowledge search failed")
+        raise HTTPException(status_code=503, detail="知识库检索暂时不可用") from exc
+
+    return [KnowledgeSearchResultResponse(
+        chunk_id=item.chunk_id,
+        document_id=item.document_id,
+        version_id=item.version_id,
+        document_title=item.document_title,
+        source_type=item.source_type,
+        version_no=item.version_no,
+        quote=item.quote,
+        locator=item.locator,
+        rank=item.rank,
+        semantic_score_percent=_percent(item.semantic_score),
+        keyword_match_percent=_percent(item.keyword_score),
+        source_weight_percent=round(item.source_weight * 100, 1),
+        combined_score_percent=_percent(item.combined_score, maximum=1.25),
+    ) for item in evidence]
 
 
 @router.get(

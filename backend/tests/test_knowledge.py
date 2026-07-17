@@ -54,6 +54,14 @@ class EmptyVectorIndex:
         return []
 
 
+class RecalledVectorIndex:
+    def __init__(self, recalled: list[tuple[str, float]]):
+        self.recalled = recalled
+
+    async def search(self, vector, scene, limit):
+        return self.recalled[:limit]
+
+
 def test_evidence_state_is_json_checkpoint_safe():
     evidence = EvidenceContext(
         chunk_id="chunk", version_id="version", document_id="document",
@@ -147,6 +155,72 @@ async def test_retrieval_does_not_write_audit_event(knowledge_db_factory):
         events = list((await db.execute(select(KnowledgeAuditEvent))).scalars().all())
 
     assert events == []
+
+
+@pytest.mark.asyncio
+async def test_retrieval_exposes_independent_scores_and_final_rank(knowledge_db_factory):
+    async with knowledge_db_factory() as db:
+        methodology = KnowledgeDocument(title="转化方法", status="published")
+        case = KnowledgeDocument(title="经营案例", status="published")
+        db.add_all([methodology, case])
+        await db.flush()
+        methodology_version = KnowledgeDocumentVersion(
+            document_id=methodology.id,
+            version_no=1,
+            original_filename="method.md",
+            content_type="text/markdown",
+            source_type="methodology",
+            sha256="c" * 64,
+            storage_key="documents/method.md",
+            status="published",
+            effective_from=datetime.utcnow(),
+        )
+        case_version = KnowledgeDocumentVersion(
+            document_id=case.id,
+            version_no=1,
+            original_filename="case.md",
+            content_type="text/markdown",
+            source_type="case_sop",
+            sha256="d" * 64,
+            storage_key="documents/case.md",
+            status="published",
+            effective_from=datetime.utcnow(),
+        )
+        db.add_all([methodology_version, case_version])
+        await db.flush()
+        keyword_match = KnowledgeChunk(
+            version_id=methodology_version.id,
+            chunk_no=1,
+            content="流量 转化 方法",
+            locator={"line_start": 2, "line_end": 4},
+        )
+        semantic_match = KnowledgeChunk(
+            version_id=case_version.id,
+            chunk_no=1,
+            content="库存 周转 案例",
+            locator={"line_start": 1, "line_end": 1},
+        )
+        db.add_all([keyword_match, semantic_match])
+        await db.commit()
+
+    service = KnowledgeRetrievalService(
+        vector_index=RecalledVectorIndex([
+            (semantic_match.id, 0.90),
+            (keyword_match.id, 0.80),
+        ]),
+        embedding_service=FakeEmbedder(),
+        session_factory=knowledge_db_factory,
+    )
+    service._ready = True
+
+    results = await service.retrieve("流量 转化", {}, limit=2)
+
+    assert [item.document_title for item in results] == ["转化方法", "经营案例"]
+    assert [item.rank for item in results] == [1, 2]
+    assert results[0].semantic_score == pytest.approx(0.80)
+    assert results[0].keyword_score == pytest.approx(1.0)
+    assert results[0].source_weight == pytest.approx(0.10)
+    assert results[0].combined_score == pytest.approx(1.05)
 
 
 @pytest.mark.asyncio
