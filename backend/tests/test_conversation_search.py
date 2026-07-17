@@ -37,6 +37,19 @@ class FailingKnowledgeService:
         raise RuntimeError("embedding endpoint returned 404")
 
 
+class SuccessfulKnowledgeService:
+    async def retrieve(self, query, scene, *, limit, raise_on_error=False):
+        assert raise_on_error is True
+        return [type("Evidence", (), {
+            "document_title": "confidential-result-title",
+            "version_no": 1,
+            "quote": "confidential-result-content",
+            "locator": {},
+            "source_type": "methodology",
+            "rank": 1,
+        })()]
+
+
 class FakeHttpClient:
     def __init__(self, response: httpx.Response) -> None:
         self.response = response
@@ -262,6 +275,32 @@ async def test_knowledge_tool_exposes_embedding_failure_to_the_model():
     assert '"status": "error"' in raw
     assert '"reason": "knowledge_retrieval_failed"' in raw
     assert executor.invocations[0].status == "error"
+
+
+@pytest.mark.asyncio
+async def test_conversation_tool_logs_start_and_result_summary_without_result_content(
+    caplog,
+    monkeypatch,
+):
+    from app.services.search.tools import ConversationToolExecutor
+
+    monkeypatch.setattr(settings, "llm_trace_enabled", True)
+    caplog.set_level(logging.INFO, logger="app.services.search.tools")
+    executor = ConversationToolExecutor(knowledge_service=SuccessfulKnowledgeService())
+
+    await executor.execute(
+        "search_knowledge_base",
+        {"query": "餐饮客流", "limit": 1},
+        {"industry": "餐饮"},
+    )
+
+    assert "conversation_tool_start" in caplog.text
+    assert 'args={"query": "餐饮客流", "limit": 1}' in caplog.text
+    assert "conversation_tool_result" in caplog.text
+    assert "status=success" in caplog.text
+    assert "result_count=1" in caplog.text
+    assert "confidential-result-title" not in caplog.text
+    assert "confidential-result-content" not in caplog.text
 
 
 def test_scene_routing_enters_tool_enabled_conversation_turn_directly():

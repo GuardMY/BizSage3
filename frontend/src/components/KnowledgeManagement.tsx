@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, type ReactNode, useCallback, useEffect, useState } from "react";
-import { AlertCircle, BookOpen, CheckCircle2, Database, ExternalLink, FileUp, LoaderCircle, Play, RefreshCw, RotateCcw, Search, Send, X } from "lucide-react";
+import { AlertCircle, BookOpen, CheckCircle2, Database, ExternalLink, FileClock, FileUp, LoaderCircle, Play, RefreshCw, RotateCcw, Search, Send, X } from "lucide-react";
 import * as api from "@/lib/api";
 import type { KnowledgeCatalogSyncItem, KnowledgeCatalogSyncRun, KnowledgeDocument, KnowledgeSearchResult, KnowledgeSourceType, KnowledgeVersion } from "@/types";
 
@@ -11,7 +11,17 @@ const SOURCE_TYPES: Array<{ value: KnowledgeSourceType; label: string }> = [
   { value: "case_sop", label: "脱敏案例与 SOP" },
 ];
 
+type KnowledgeTab = "upload" | "search" | "versions" | "sync";
+
+const KNOWLEDGE_TABS = [
+  { id: "upload", label: "文档上传", icon: FileUp },
+  { id: "search", label: "检索", icon: Search },
+  { id: "versions", label: "资料版本", icon: FileClock },
+  { id: "sync", label: "内置行业文档同步", icon: Database },
+] satisfies Array<{ id: KnowledgeTab; label: string; icon: typeof FileUp }>;
+
 export default function KnowledgeManagement() {
+  const [activeTab, setActiveTab] = useState<KnowledgeTab>("upload");
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -98,6 +108,7 @@ export default function KnowledgeManagement() {
     }
     setFile(null);
     setError(null);
+    setActiveTab("upload");
   }
 
   async function submit(event: FormEvent) {
@@ -179,18 +190,48 @@ export default function KnowledgeManagement() {
   }
 
   return (
-    <section className="mt-12 border-t border-gray-200 pt-8">
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_390px]">
-        <div>
-          <div className="flex items-center gap-2">
-            <BookOpen className="h-5 w-5 text-indigo-600" />
-            <h2 className="text-sm font-semibold">行业知识库</h2>
-          </div>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-500">
-            已发布版本才会参与诊断检索。替代或撤回不会改写历史报告；撤回后来源详情和原件立即不可访问。
-          </p>
+    <section>
+      <header>
+        <div className="flex items-center gap-2">
+          <BookOpen className="h-5 w-5 text-indigo-600" />
+          <h2 className="text-lg font-semibold">行业知识库</h2>
         </div>
-        <form onSubmit={submit} className="space-y-3 rounded-md border border-gray-200 bg-white p-5 shadow-sm">
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-500">
+          已发布版本才会参与诊断检索。替代或撤回不会改写历史报告；撤回后来源详情和原件立即不可访问。
+        </p>
+      </header>
+
+      <div className="mt-6 overflow-x-auto border-b border-gray-200">
+        <div role="tablist" aria-label="知识库功能" className="flex min-w-max gap-6">
+          {KNOWLEDGE_TABS.map(({ id, label, icon: Icon }) => {
+            const active = activeTab === id;
+            return (
+              <button
+                key={id}
+                id={`knowledge-tab-${id}`}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                aria-controls={`knowledge-panel-${id}`}
+                onClick={() => setActiveTab(id)}
+                className={`flex h-12 items-center gap-2 border-b-2 px-1 text-sm font-medium transition-colors ${
+                  active
+                    ? "border-indigo-600 text-indigo-700"
+                    : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-800"
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                <span>{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {error && <div role="alert" className="mt-6 border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+
+      <div id="knowledge-panel-upload" role="tabpanel" aria-labelledby="knowledge-tab-upload" hidden={activeTab !== "upload"} className="mt-6">
+        <form onSubmit={submit} className="max-w-2xl space-y-3 rounded-md border border-gray-200 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-sm font-semibold">{replacementFor ? `上传 ${replacementFor.title} 的新版本` : "上传资料"}</h3>
             {replacementFor && (
@@ -224,9 +265,7 @@ export default function KnowledgeManagement() {
         </form>
       </div>
 
-      {error && <div role="alert" className="mt-6 border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
-
-      <div className="mt-8 border-y border-gray-200 py-6">
+      <div id="knowledge-panel-search" role="tabpanel" aria-labelledby="knowledge-tab-search" hidden={activeTab !== "search"} className="mt-6">
         <div className="flex items-center gap-2">
           <Search className="h-4 w-4 text-gray-600" />
           <h3 className="text-sm font-semibold">检索已发布知识</h3>
@@ -286,7 +325,7 @@ export default function KnowledgeManagement() {
         )}
       </div>
 
-      <div className="mt-8 border-b border-gray-200 pb-6">
+      <div id="knowledge-panel-sync" role="tabpanel" aria-labelledby="knowledge-tab-sync" hidden={activeTab !== "sync"} className="mt-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
@@ -345,7 +384,7 @@ export default function KnowledgeManagement() {
         )}
       </div>
 
-      <div className="mt-8">
+      <div id="knowledge-panel-versions" role="tabpanel" aria-labelledby="knowledge-tab-versions" hidden={activeTab !== "versions"} className="mt-6">
         <div className="mb-4 flex items-center justify-between gap-4">
           <div><h3 className="text-sm font-semibold">资料版本</h3><p className="mt-1 text-xs text-gray-500">共 {documents.length} 份资料</p></div>
           <button onClick={() => void loadDocuments()} disabled={loading} title="刷新资料列表" aria-label="刷新资料列表" className="flex h-9 w-9 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /></button>

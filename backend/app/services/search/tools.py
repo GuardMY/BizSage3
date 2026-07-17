@@ -86,6 +86,12 @@ class ConversationToolExecutor:
 
     async def execute(self, tool_name: str, raw_args: Any, scene: dict[str, str]) -> str:
         started = time.perf_counter()
+        if settings.llm_trace_enabled:
+            logger.info(
+                "conversation_tool_start tool_name=%s args=%s",
+                tool_name,
+                json.dumps(raw_args, ensure_ascii=False, default=str),
+            )
         if len(self._invocations) >= settings.web_search_max_tool_calls:
             return self._limited(tool_name, started, "tool_call_limit")
         if not isinstance(raw_args, dict):
@@ -113,26 +119,14 @@ class ConversationToolExecutor:
             logger.exception("Conversation tool failed: %s", tool_name)
             results, provider, status, reason = [], None, "error", "tool_execution_error"
 
-        elapsed = int((time.perf_counter() - started) * 1000)
-        self._invocations.append(ToolInvocationSummary(
+        self._record_invocation(ToolInvocationSummary(
             tool_name=tool_name,
             provider=provider,
             status=status,
-            latency_ms=elapsed,
+            latency_ms=int((time.perf_counter() - started) * 1000),
             result_count=len(results),
             error_type=reason,
         ))
-        if settings.llm_trace_enabled:
-            logger.info(
-                "conversation_tool tool_name=%s args=%s provider=%s status=%s latency_ms=%s result_count=%s error_type=%s",
-                tool_name,
-                json.dumps(args, ensure_ascii=False, default=str),
-                provider,
-                status,
-                elapsed,
-                len(results),
-                reason,
-            )
         return _tool_response(status, results, reason)
 
     async def _search_knowledge(
@@ -194,13 +188,26 @@ class ConversationToolExecutor:
         return citation
 
     def _limited(self, tool_name: str, started: float, reason: str) -> str:
-        self._invocations.append(ToolInvocationSummary(
+        self._record_invocation(ToolInvocationSummary(
             tool_name=tool_name,
             status="limited",
             latency_ms=int((time.perf_counter() - started) * 1000),
             error_type=reason,
         ))
         return _tool_response("limited", [], reason)
+
+    def _record_invocation(self, summary: ToolInvocationSummary) -> None:
+        self._invocations.append(summary)
+        if settings.llm_trace_enabled:
+            logger.info(
+                "conversation_tool_result tool_name=%s provider=%s status=%s latency_ms=%s result_count=%s error_type=%s",
+                summary.tool_name,
+                summary.provider,
+                summary.status,
+                summary.latency_ms,
+                summary.result_count,
+                summary.error_type,
+            )
 
 
 def _validated_args(raw_args: dict[str, Any]) -> dict[str, Any]:
