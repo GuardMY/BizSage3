@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-3.5-turbo"
     llm_temperature: float = 0.0
     llm_max_tokens: int = 2048
+    # Full LLM prompts, tool schemas/results, and model outputs are sensitive.
+    llm_trace_enabled: bool = False
 
     # Knowledge base: OpenAI-compatible embeddings, object storage and vectors.
     embedding_api_key: str = ""

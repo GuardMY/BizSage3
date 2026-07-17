@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from app.config import settings
 from app.domain.schemas import CompletenessEval, Scene, ConversationTurnOutput
 from app.services.model_service import OpenAICompatibleModel
 
@@ -20,8 +21,9 @@ def model_with_json_response(return_value: str):
 
 
 @pytest.mark.asyncio
-async def test_recognize_scene_logs_request_and_response(caplog):
+async def test_recognize_scene_logs_request_and_response(caplog, monkeypatch):
     model = model_with_json_response('{"industry": "餐饮"}')
+    monkeypatch.setattr(settings, "llm_trace_enabled", True)
     caplog.set_level(logging.INFO, logger="app.services.model_service")
 
     result = await model.recognize_scene("我在经营一家餐厅")
@@ -35,7 +37,7 @@ async def test_recognize_scene_logs_request_and_response(caplog):
 
 
 @pytest.mark.asyncio
-async def test_conversation_turn_logs_request_and_response(caplog):
+async def test_conversation_turn_logs_request_and_response(caplog, monkeypatch):
     """conversation_turn should log the full request/response cycle."""
     json_response = (
         '{"new_facts": ["日均营业额约1万元"], '
@@ -44,6 +46,7 @@ async def test_conversation_turn_logs_request_and_response(caplog):
         '"suggested_replies": ["大概50元", "80元左右", "100多"]}'
     )
     model = model_with_json_response(json_response)
+    monkeypatch.setattr(settings, "llm_trace_enabled", True)
     caplog.set_level(logging.INFO, logger="app.services.model_service")
 
     result = await model.conversation_turn(

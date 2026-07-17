@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 import httpx
+import logging
 from langchain_core.messages import AIMessage
 
+from app.config import settings
 from app.domain.schemas import ConversationCitation
 from app.services.model_service import OpenAICompatibleModel, validate_conversation_citations
 from app.services.search.contracts import SearchResult, WebSearchRequest
@@ -223,6 +225,27 @@ async def test_model_tool_loop_keeps_only_citations_returned_by_tools():
     assert result.reply == "政策有更新。[资料 1] 以及虚构来源。"
     assert result.citations == executor.evidence
     assert result.tool_evidence == executor.evidence
+
+
+@pytest.mark.asyncio
+async def test_model_tool_loop_trace_logs_tools_calls_and_tool_messages(caplog, monkeypatch):
+    monkeypatch.setattr(settings, "llm_trace_enabled", True)
+    caplog.set_level(logging.INFO, logger="app.services.model_service")
+    executor = StubToolExecutor()
+    model = OpenAICompatibleModel.__new__(OpenAICompatibleModel)
+    model.llm = FakeToolLLM()
+    model._tool_executor_factory = lambda: executor
+
+    await model.conversation_turn(
+        [{"role": "user", "content": "latest policy"}],
+        [],
+        {"industry": "restaurant"},
+    )
+
+    assert '"tools"' in caplog.text
+    assert '"tool_calls"' in caplog.text
+    assert '"type": "tool"' in caplog.text
+    assert '"query":' in caplog.text
 
 
 @pytest.mark.asyncio

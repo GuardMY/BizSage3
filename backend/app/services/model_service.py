@@ -32,6 +32,60 @@ if TYPE_CHECKING:
     from app.services.knowledge import EvidenceContext
 
 
+def _message_for_trace(message: Any) -> dict[str, Any]:
+    """Convert a LangChain message into a complete, JSON-loggable payload."""
+    payload: dict[str, Any] = {
+        "type": getattr(message, "type", type(message).__name__),
+        "content": getattr(message, "content", None),
+    }
+    for field in (
+        "name",
+        "tool_calls",
+        "invalid_tool_calls",
+        "tool_call_id",
+        "additional_kwargs",
+        "response_metadata",
+        "usage_metadata",
+    ):
+        value = getattr(message, field, None)
+        if value is not None and value != {} and value != []:
+            payload[field] = value
+    return payload
+
+
+def _trace_json(value: Any) -> str:
+    """Serialize trace data without allowing logging to break an LLM call."""
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _trace_llm_request(
+    node_name: str,
+    mode: str,
+    messages: list[Any],
+    *,
+    tools: Any = None,
+) -> None:
+    if not settings.llm_trace_enabled:
+        return
+    payload: dict[str, Any] = {
+        "messages": [_message_for_trace(message) for message in messages],
+    }
+    if tools is not None:
+        payload["tools"] = tools
+    logger.info("[%s] LLM %s request\n%s", node_name, mode, _trace_json(payload))
+
+
+def _trace_llm_response(node_name: str, mode: str, response: Any) -> None:
+    if not settings.llm_trace_enabled:
+        return
+    logger.info(
+        "[%s] LLM %s response\n%s",
+        node_name,
+        mode,
+        _trace_json(_message_for_trace(response)),
+    )
+
+
 def _decision_contract(active_scene: Dict[str, str], *, initial: bool) -> str:
     """Return the shared JSON decision contract for scene and turn handling."""
     active_scene_text = json.dumps(active_scene, ensure_ascii=False) if active_scene else "（尚未确认业务场景）"
@@ -180,10 +234,10 @@ class OpenAICompatibleModel(DiagnosisModel):
             messages.extend(convert_to_messages(history))
         messages.append(HumanMessage(content=user))
 
-        logger.info("[%s] LLM Chat request\nsystem: %s\nhistory: %s\nuser: %s", node_name, system, history, user)
+        _trace_llm_request(node_name, "Chat", messages)
         res = await self.llm.ainvoke(messages)
         content = res.content
-        logger.info("[%s] LLM Chat response:\n%s", node_name, content)
+        _trace_llm_response(node_name, "Chat", res)
         return content
 
     async def _invoke_json(
@@ -204,10 +258,10 @@ class OpenAICompatibleModel(DiagnosisModel):
             messages.extend(convert_to_messages(history))
         messages.append(HumanMessage(content=user))
 
-        logger.info("[%s] LLM JSON request\nsystem: %s\nhistory: %s\nuser: %s", node_name, system, history, user)
+        _trace_llm_request(node_name, "JSON", messages)
         res = await self.json_llm.ainvoke(messages)
         content = res.content
-        logger.info("[%s] LLM JSON response:\n%s", node_name, content)
+        _trace_llm_response(node_name, "JSON", res)
         return content
 
     # ─── Scene Recognition ──────────────────────────────────────────────
@@ -339,7 +393,14 @@ class OpenAICompatibleModel(DiagnosisModel):
             response = None
 
             for _ in range(2):
+                _trace_llm_request(
+                    "conversation_turn 对话回合",
+                    "Tool",
+                    messages_for_model,
+                    tools=CONVERSATION_TOOL_SCHEMAS,
+                )
                 response = await tool_llm.ainvoke(messages_for_model)
+                _trace_llm_response("conversation_turn 对话回合", "Tool", response)
                 tool_calls = list(getattr(response, "tool_calls", None) or [])
                 if not tool_calls:
                     break
@@ -355,7 +416,14 @@ class OpenAICompatibleModel(DiagnosisModel):
             else:
                 # The tool decision budget is exhausted. One plain completion
                 # turns the latest tool data into the required JSON response.
+                _trace_llm_request(
+                    "conversation_turn 对话回合",
+                    "Tool",
+                    messages_for_model,
+                    tools=[],
+                )
                 response = await self.llm.ainvoke(messages_for_model)
+                _trace_llm_response("conversation_turn 对话回合", "Tool", response)
 
             raw = _message_content(response)
             result = _parse_conversation_turn_output(raw)
