@@ -81,7 +81,7 @@ services:
     expose:
       - "8000"
     deploy:
-      replicas: 3
+      replicas: 1
     init: true
     restart: unless-stopped
 
