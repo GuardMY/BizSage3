@@ -8,9 +8,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api import start_report_generation
 from app.auth import Principal
-from app.models import Base
+from app.models import Base, ReportGenerationJob
 from app.repository import SessionRepository
-from app.services.report_service import ReportContext, ReportTaskManager
+from app.services.report_service import ReportContext, ReportJobService
 
 
 @pytest.fixture
@@ -72,23 +72,27 @@ async def test_background_task_persists_a_new_report(
 
         session = await repo.get_session(session.id)
         context = ReportContext.from_session(session)
-        assert await repo.try_start_report_generation(session.id) is True
+        job = await repo.create_report_generation_job(session.id, context.to_dict())
+        assert job is not None
         await db.commit()
 
-    manager = ReportTaskManager(
+    service = ReportJobService(
         model_factory=lambda: mock_model,
         session_factory=report_db_factory,
     )
-    await manager.start(context)
+    await service.run(job.id, worker_id="test-worker")
 
     async with report_db_factory() as db:
         repo = SessionRepository.for_system(db)
         session = await repo.get_session(context.session_id)
         reports = await repo.list_reports(context.session_id)
+        saved_job = await db.get(ReportGenerationJob, job.id)
 
     assert session.report_generating is False
     assert session.report_error is None
     assert len(reports) == 1
+    assert saved_job.state == "completed"
+    assert saved_job.worker_id == "test-worker"
     assert "本月访客两万人" in reports[0].markdown
 
 
@@ -101,10 +105,10 @@ async def test_start_report_api_rejects_a_second_running_task(
         repo = SessionRepository.for_system(db)
         session = await repo.create_session()
         await db.commit()
-        monkeypatch.setattr(
-            "app.api.report_task_manager.start",
-            lambda context: None,
-        )
+        async def enqueue_report(job_id):
+            return None
+
+        monkeypatch.setattr("app.api.task_queue.enqueue_report", enqueue_report)
 
         principal = Principal(role="admin", expires_at=datetime.max)
         accepted = await start_report_generation(session.id, principal, db)

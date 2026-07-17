@@ -10,9 +10,13 @@ from app.domain.schemas import ResumeInput
 @pytest.fixture
 async def wf():
     """Create and start a WorkflowManager with mock model."""
-    mgr = WorkflowManager()
+    mgr = WorkflowManager(
+        checkpoint_url="sqlite+aiosqlite:///checkpoints.db",
+        setup_on_start=True,
+    )
     await mgr.startup()
     yield mgr
+    await mgr.shutdown()
     # Cleanup: remove test checkpoint files
     import os
     for f in ["checkpoints.db"]:

@@ -3,17 +3,14 @@
 Includes session CRUD, SSE chat streaming, report retrieval, and meta.
 """
 
-import asyncio
 import json
 import logging
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app.db import get_session as get_db_session
+from app.db import async_session_factory, get_session as get_db_session
 from app.auth import Principal, get_current_principal
 from app.domain.schemas import ResumeInput
 from app.api_schemas import (
@@ -26,7 +23,9 @@ from app.api_schemas import (
 from app.serializers import session_summary, session_detail, report_response
 from app.repository import SessionRepository
 from app.services.workflow import workflow_manager
-from app.services.report_service import ReportContext, report_task_manager
+from app.services.coordination import session_lock_manager
+from app.services.report_service import ReportContext
+from app.services.task_queue import task_queue
 from app.services.knowledge import (
     evidence_from_state,
     persist_report_evidences,
@@ -124,7 +123,6 @@ async def delete_session(
     session = await repo.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    await report_task_manager.cancel(session_id)
     deleted = await repo.delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -170,34 +168,40 @@ async def chat_message(
             detail="诊断报告已改为后台生成，请使用 POST /sessions/{id}/reports",
         )
 
-    repo = SessionRepository.for_principal(db, principal)
-
-    # 1. Load session
-    session = await repo.get_session(session_id)
+    session = await SessionRepository.for_principal(db, principal).get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    await db.rollback()
 
-    # 2. Concurrency: acquire per-session lock
-    lock = workflow_manager.get_lock(session_id)
-    acquired = lock.locked()
-    if acquired:
+    lease = await session_lock_manager.acquire(session_id)
+    if lease is None:
         raise HTTPException(
             status_code=409,
             detail="A message is already being processed for this session",
         )
 
     async def event_generator():
-        async with lock:
-            try:
-                async for event in _process_message(repo, session, body):
-                    yield event
-                await db.commit()
-            except Exception as exc:
-                logger.exception("Error processing message for session %s", session_id)
-                session.status = "failed"
-                session.error_message = str(exc)
-                await db.commit()
-                yield {"event": "error", "data": json.dumps({"message": str(exc)}, ensure_ascii=False)}
+        try:
+            async with async_session_factory() as stream_db:
+                repo = SessionRepository.for_principal(stream_db, principal)
+                stream_session = await repo.get_session(session_id)
+                if stream_session is None:
+                    yield {"event": "error", "data": json.dumps({"message": "Session not found"})}
+                    return
+                try:
+                    async for event in _process_message(repo, stream_session, body):
+                        yield event
+                except Exception as exc:
+                    await stream_db.rollback()
+                    logger.exception("Error processing message for session %s", session_id)
+                    failed_session = await repo.get_session(session_id)
+                    if failed_session is not None:
+                        failed_session.status = "failed"
+                        failed_session.error_message = str(exc)
+                        await stream_db.commit()
+                    yield {"event": "error", "data": json.dumps({"message": str(exc)}, ensure_ascii=False)}
+        finally:
+            await lease.release()
 
     return EventSourceResponse(event_generator())
 
@@ -219,6 +223,9 @@ async def _process_message(repo: SessionRepository, session, body: MessageReques
         await repo.add_user_message(
             session.id, body.content, body.client_message_id
         )
+        await repo.db.commit()
+    else:
+        await repo.db.commit()
 
     # 3. Determine: start new workflow or resume
     stage = session.stage or "init"
@@ -257,6 +264,9 @@ async def _process_message(repo: SessionRepository, session, body: MessageReques
 async def _emit_result(repo: SessionRepository, session, result: dict):
     """Extract and emit SSE events from workflow result."""
 
+    events: list[dict[str, str]] = []
+    session_id = session.id
+
     # Update session state from workflow result
     await repo.update_session_state(session, result)
 
@@ -273,14 +283,14 @@ async def _emit_result(repo: SessionRepository, session, result: dict):
         if role == "assistant" and content:
             citations = msg_dict.get("citations") or None
             # Stream as delta events (simulate word-by-word for real-time feel)
-            yield {"event": "assistant.delta", "data": json.dumps(
+            events.append({"event": "assistant.delta", "data": json.dumps(
                 {"target": "message", "delta": content[:50]}, ensure_ascii=False
-            )}
+            )})
 
             # Full message event
-            yield {"event": "assistant.message", "data": json.dumps(
+            events.append({"event": "assistant.message", "data": json.dumps(
                 {"content": content, "citations": citations}, ensure_ascii=False
-            )}
+            )})
 
             # Save to DB with suggested_replies from workflow state
             suggestions = result.get("suggested_replies", []) or []
@@ -293,10 +303,10 @@ async def _emit_result(repo: SessionRepository, session, result: dict):
 
             # Emit suggested_replies SSE event if present
             if suggestions:
-                yield {"event": "suggested_replies", "data": json.dumps(
+                events.append({"event": "suggested_replies", "data": json.dumps(
                     {"message_id": saved_msg.id, "replies": suggestions},
                     ensure_ascii=False,
-                )}
+                )})
 
     # Check if report was generated
     final_report = result.get("final_report", "")
@@ -312,31 +322,30 @@ async def _emit_result(repo: SessionRepository, session, result: dict):
             diagnosis={"raw": result.get("diagnosis_result", "")},
         )
         await persist_report_evidences(repo.db, report_id=report.id, selected=selected)
-        yield {"event": "report.ready", "data": json.dumps(
+        events.append({"event": "report.ready", "data": json.dumps(
             {"session_id": session.id}, ensure_ascii=False
-        )}
+        )})
 
     # Emit stage update
     stage = result.get("stage", "")
     if stage:
-        yield {"event": "stage", "data": json.dumps(
+        events.append({"event": "stage", "data": json.dumps(
             {"stage": stage, "label": STAGE_LABELS.get(stage, stage)}
-        )}
+        )})
 
-    # Emit full state snapshot
-    # Re-fetch session to get latest DB state (messages were added during
-    # this request and the in-memory ORM relationship is stale).
-    fresh_session = await repo.get_session(session.id)
-    if fresh_session:
-        detail = session_detail(fresh_session)
-    else:
-        detail = session_detail(session)
-    yield {"event": "state", "data": json.dumps(
+    await repo.db.commit()
+    repo.db.expire_all()
+    fresh_session = await repo.get_session(session_id)
+    if fresh_session is None:
+        raise RuntimeError("Session disappeared while persisting workflow result")
+    detail = session_detail(fresh_session)
+    events.append({"event": "state", "data": json.dumps(
         detail.model_dump(mode="json"), ensure_ascii=False
-    )}
+    )})
 
-    # Done
-    yield {"event": "done", "data": json.dumps({"session_id": session.id})}
+    events.append({"event": "done", "data": json.dumps({"session_id": session_id})})
+    for event in events:
+        yield event
 
 
 # =============================================================================
@@ -360,17 +369,16 @@ async def start_report_generation(
         raise HTTPException(status_code=404, detail="Session not found")
 
     context = ReportContext.from_session(session)
-    acquired = await repo.try_start_report_generation(session_id)
-    if not acquired:
+    job = await repo.create_report_generation_job(session_id, context.to_dict())
+    if job is None:
         raise HTTPException(status_code=409, detail="该会话已有诊断报告正在生成")
     await db.commit()
 
     try:
-        report_task_manager.start(context)
-    except RuntimeError as exc:
-        await repo.finish_report_generation(session_id, error=str(exc))
-        await db.commit()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        await task_queue.enqueue_report(job.id)
+    except Exception:
+        # The worker reconciler will re-enqueue the durable queued row.
+        logger.exception("Failed to enqueue report job: %s", job.id)
 
     return ReportGenerationResponse(session_id=session_id)
 

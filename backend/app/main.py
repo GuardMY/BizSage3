@@ -3,54 +3,45 @@
 import logging
 from contextlib import asynccontextmanager
 
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.config import settings
+from app.db import engine
+from app.api import router as api_router
+from app.auth import get_current_principal
+from app.auth_api import router as auth_router
+from app.knowledge_api import router as knowledge_router
+from app.services.knowledge import (
+    knowledge_retrieval_service,
+    knowledge_storage,
+)
+from app.services.coordination import session_lock_manager
+from app.services.task_queue import task_queue
+from app.services.workflow import workflow_manager
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-from fastapi import Depends, FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-
-from app.config import settings
-from app.db import engine
-from app.models import Base
-from app.api import router as api_router
-from app.auth import get_current_principal
-from app.auth_api import router as auth_router
-from app.knowledge_api import router as knowledge_router
-from app.services.knowledge import (
-    knowledge_ingestion_manager,
-    knowledge_retrieval_service,
-    knowledge_storage,
-)
-from app.services.workflow import workflow_manager
-from app.services.report_service import report_task_manager
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: create tables, configure SQLite, init workflow. Shutdown: cleanup."""
-    # Enable WAL mode and create all tables
-    async with engine.begin() as conn:
-        await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
-        await conn.run_sync(Base.metadata.create_all)
-
+    """Initialize external clients after one-shot migrations have completed."""
     await knowledge_storage.startup()
     await knowledge_retrieval_service.startup()
-    await knowledge_ingestion_manager.startup()
-
-    # Start the workflow manager (initializes checkpointer + graph)
+    await session_lock_manager.startup()
+    await task_queue.startup()
     await workflow_manager.startup()
-    await report_task_manager.startup()
 
     yield
 
-    # Cleanup
-    await knowledge_ingestion_manager.shutdown()
     await knowledge_retrieval_service.shutdown()
-    await report_task_manager.shutdown()
     await workflow_manager.shutdown()
+    await task_queue.shutdown()
+    await session_lock_manager.shutdown()
     await engine.dispose()
 
 
@@ -87,6 +78,8 @@ def create_app() -> FastAPI:
     async def health_ready():
         async with engine.connect() as conn:
             await conn.exec_driver_sql("SELECT 1")
+        if not await task_queue.ping() or not await session_lock_manager.ping():
+            raise HTTPException(status_code=503, detail="Redis is unavailable")
         return {"status": "ready"}
 
     return app

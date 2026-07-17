@@ -16,19 +16,17 @@ Each conversation turn is a SINGLE LLM call (was 2 before the merge).
 Uses LangGraph's interrupt() for human-in-the-loop pauses.
 """
 
-import asyncio
 import logging
 from typing import Any, Optional, Dict, List, TypedDict
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import interrupt, Command
 
+from app.checkpoints import checkpoint_context
 from app.config import settings
 from app.domain.schemas import ResumeInput, CompletenessEval, ConversationTurnOutput
 from app.services.knowledge import (
-    evidence_from_state,
     evidence_to_state,
     knowledge_retrieval_service,
 )
@@ -441,27 +439,32 @@ def build_graph(model: Optional[DiagnosisModel] = None) -> StateGraph:
 class WorkflowManager:
     """Manages the LangGraph workflow lifecycle."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        checkpoint_url: str | None = None,
+        setup_on_start: bool | None = None,
+    ):
         self._graph: Optional[CompiledStateGraph] = None
-        self._checkpointer: Optional[AsyncSqliteSaver] = None
+        self._checkpointer: Any | None = None
         self._checkpointer_ctx: Optional[Any] = None
         self._model: Optional[DiagnosisModel] = None
-        self._locks: Dict[str, asyncio.Lock] = {}
+        self._checkpoint_url = checkpoint_url or settings.checkpoint_db_url
+        self._setup_on_start = (
+            settings.checkpoint_setup_on_start
+            if setup_on_start is None
+            else setup_on_start
+        )
 
     async def startup(self):
         """Initialize the graph, checkpointer, and model."""
         self._model = create_model()
         graph = build_graph(self._model)
 
-        db_url = settings.checkpoint_db_url
-        if db_url.startswith("sqlite+aiosqlite://"):
-            db_path = db_url[len("sqlite+aiosqlite://"):]
-        else:
-            db_path = db_url
-
-        self._checkpointer_ctx = AsyncSqliteSaver.from_conn_string(db_path)
+        self._checkpointer_ctx = checkpoint_context(self._checkpoint_url)
         self._checkpointer = await self._checkpointer_ctx.__aenter__()
-        await self._checkpointer.setup()
+        if self._setup_on_start:
+            await self._checkpointer.setup()
 
         self._graph = graph.compile(checkpointer=self._checkpointer)
         logger.info("WorkflowManager started")
@@ -512,13 +515,6 @@ class WorkflowManager:
             config,
         )
         return result
-
-    def get_lock(self, session_id: str) -> asyncio.Lock:
-        """Get or create a per-session asyncio.Lock for concurrency control."""
-        if session_id not in self._locks:
-            self._locks[session_id] = asyncio.Lock()
-        return self._locks[session_id]
-
 
 # Singleton
 workflow_manager = WorkflowManager()

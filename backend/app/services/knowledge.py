@@ -30,7 +30,7 @@ from app.models import (
     KnowledgeDocument,
     KnowledgeDocumentVersion,
     KnowledgeIngestionJob,
-    Report,
+    KnowledgeVectorSyncJob,
     ReportEvidence,
 )
 
@@ -204,6 +204,20 @@ class KnowledgeStorage:
 
         return await asyncio.to_thread(operation)
 
+    async def delete(self, storage_key: str) -> None:
+        await asyncio.to_thread(
+            self._client.remove_object,
+            settings.minio_bucket,
+            storage_key,
+        )
+
+    async def clear(self) -> None:
+        def operation() -> None:
+            for item in self._client.list_objects(settings.minio_bucket, recursive=True):
+                self._client.remove_object(settings.minio_bucket, item.object_name)
+
+        await asyncio.to_thread(operation)
+
 
 class EmbeddingService:
     def __init__(self) -> None:
@@ -254,6 +268,12 @@ class KnowledgeVectorIndex:
     async def close(self) -> None:
         await self._client.close()
 
+    async def reset_collection(self) -> None:
+        collections = await self._client.get_collections()
+        if any(item.name == settings.qdrant_collection for item in collections.collections):
+            await self._client.delete_collection(settings.qdrant_collection)
+        await self.startup()
+
     async def upsert_chunks(
         self,
         chunks: list[KnowledgeChunk],
@@ -262,7 +282,9 @@ class KnowledgeVectorIndex:
     ) -> None:
         points: list[qmodels.PointStruct] = []
         for chunk, vector in zip(chunks, vectors, strict=True):
-            point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"bizsage:{chunk.id}"))
+            point_id = chunk.embedding_ref or str(
+                uuid.uuid5(uuid.NAMESPACE_URL, f"bizsage:{chunk.id}")
+            )
             chunk.embedding_ref = point_id
             points.append(
                 qmodels.PointStruct(
@@ -682,8 +704,8 @@ async def persist_report_evidences(
     await db.flush()
 
 
-class KnowledgeIngestionManager:
-    """Runs durable ingestion jobs; queued work resumes after service restart."""
+class KnowledgeIngestionService:
+    """Execute durable ingestion jobs without holding transactions over I/O."""
 
     def __init__(
         self,
@@ -697,121 +719,277 @@ class KnowledgeIngestionManager:
         self._vector_index = vector_index or knowledge_vector_index
         self._embedding_service = embedding_service or globals().get("embedding_service") or EmbeddingService()
         self._session_factory = session_factory
-        self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._max_attempts = settings.background_job_max_attempts
 
-    async def startup(self) -> None:
-        async with self._session_factory() as db:
-            await db.execute(
-                update(KnowledgeIngestionJob)
-                .where(KnowledgeIngestionJob.state == "running")
-                .values(state="queued", error="服务重启后等待重试")
-            )
-            queued = list((await db.execute(
-                select(KnowledgeIngestionJob.version_id).where(KnowledgeIngestionJob.state == "queued")
-            )).scalars().all())
-            await db.commit()
-        for version_id in queued:
-            self.start(version_id)
-
-    def start(self, version_id: str) -> None:
-        task = self._tasks.get(version_id)
-        if task and not task.done():
-            return
-        task = asyncio.create_task(self._ingest(version_id), name=f"knowledge-ingest:{version_id}")
-        self._tasks[version_id] = task
-        task.add_done_callback(lambda completed: self._tasks.pop(version_id, None))
-
-    async def shutdown(self) -> None:
-        tasks = [task for task in self._tasks.values() if not task.done()]
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-    async def _ingest(self, version_id: str) -> None:
+    async def run(self, job_id: str, *, worker_id: str) -> bool:
+        claimed = await self._claim(job_id, worker_id)
+        if claimed is None:
+            return False
+        version, job, attempt_count = claimed
         try:
-            async with self._session_factory() as db:
-                version = await db.get(KnowledgeDocumentVersion, version_id)
-                if version is None or version.status == "revoked":
-                    return
-                job = await _latest_job(db, version_id)
-                if job is None:
-                    return
-                job.state = "running"
-                job.error = None
-                version.status = "parsing"
-                await db.commit()
-
             content = await self._storage.get(version.storage_key)
             parsed = parse_document(version.original_filename, content)
             chunk_data = chunk_blocks(parsed.blocks)
             if not chunk_data:
                 raise ValueError("未提取到可索引的正文内容")
+            vectors = await self._embedding_service.embed([text for text, _ in chunk_data])
+            if len(vectors) != len(chunk_data):
+                raise RuntimeError("嵌入服务返回的向量数量不正确")
+
+            chunks = [
+                KnowledgeChunk(
+                    id=uuid.uuid4().hex,
+                    version_id=version.id,
+                    chunk_no=index,
+                    content=text,
+                    locator=locator,
+                )
+                for index, (text, locator) in enumerate(chunk_data, start=1)
+            ]
+            for chunk in chunks:
+                chunk.embedding_ref = str(
+                    uuid.uuid5(uuid.NAMESPACE_URL, f"bizsage:{chunk.id}")
+                )
 
             async with self._session_factory() as db:
-                version = await db.get(KnowledgeDocumentVersion, version_id)
-                job = await _latest_job(db, version_id)
-                if version is None or job is None or version.status == "revoked":
-                    return
-                await db.execute(delete(KnowledgeChunk).where(KnowledgeChunk.version_id == version_id))
-                chunks = [
-                    KnowledgeChunk(
-                        version_id=version_id,
-                        chunk_no=index,
-                        content=text,
-                        locator=locator,
-                    )
-                    for index, (text, locator) in enumerate(chunk_data, start=1)
-                ]
+                current_version = await db.get(KnowledgeDocumentVersion, version.id)
+                current_job = await db.get(KnowledgeIngestionJob, job.id)
+                if (
+                    current_version is None
+                    or current_job is None
+                    or current_job.state != "running"
+                    or current_version.status == "revoked"
+                    or current_job.worker_id != worker_id
+                ):
+                    return False
+                await db.execute(
+                    delete(KnowledgeChunk).where(KnowledgeChunk.version_id == version.id)
+                )
                 db.add_all(chunks)
-                await db.flush()
-                vectors = await self._embedding_service.embed([chunk.content for chunk in chunks])
-                if len(vectors) != len(chunks):
-                    raise RuntimeError("嵌入服务返回的向量数量不正确")
-                version.status = "pending_review"
-                await self._vector_index.upsert_chunks(chunks, vectors, version)
-                job.state = "completed"
-                job.parser = parsed.parser
-                job.indexed_at = utcnow()
+                current_version.status = "indexing"
+                await db.commit()
+
+            version.status = "indexing"
+            await self._vector_index.upsert_chunks(chunks, vectors, version)
+
+            async with self._session_factory() as db:
+                current_version = await db.get(KnowledgeDocumentVersion, version.id)
+                current_job = await db.get(KnowledgeIngestionJob, job.id)
+                if (
+                    current_version is None
+                    or current_job is None
+                    or current_job.state != "running"
+                    or current_job.worker_id != worker_id
+                ):
+                    return False
+                if current_version.status == "revoked":
+                    current_job.state = "cancelled"
+                    current_job.finished_at = utcnow()
+                    await db.commit()
+                    await self._vector_index.delete_version(version.id)
+                    return False
+                current_version.status = "pending_review"
+                current_job.state = "completed"
+                current_job.parser = parsed.parser
+                current_job.indexed_at = utcnow()
+                current_job.finished_at = utcnow()
+                current_job.worker_id = worker_id
+                current_job.error = None
                 db.add(KnowledgeAuditEvent(
                     event_type="ingestion_completed",
-                    document_id=version.document_id,
-                    version_id=version.id,
+                    document_id=current_version.document_id,
+                    version_id=current_version.id,
                     actor_role="system",
                     detail={"parser": parsed.parser, "chunk_count": len(chunks)},
                 ))
                 await db.commit()
+            logger.info("Knowledge ingestion completed: job_id=%s version_id=%s", job.id, version.id)
+            return True
         except asyncio.CancelledError:
+            try:
+                await self._vector_index.delete_version(version.id)
+            except Exception:
+                logger.exception("Failed to clean cancelled Qdrant version %s", version.id)
+            await self._record_failure(job.id, version.id, attempt_count, worker_id, "知识入库任务被中断")
             raise
         except Exception as exc:
-            logger.exception("Knowledge ingestion failed for version %s", version_id)
-            async with self._session_factory() as db:
-                version = await db.get(KnowledgeDocumentVersion, version_id)
-                job = await _latest_job(db, version_id)
-                if version is not None:
-                    version.status = "draft"
+            logger.exception("Knowledge ingestion failed: job_id=%s version_id=%s", job.id, version.id)
+            try:
+                await self._vector_index.delete_version(version.id)
+            except Exception:
+                logger.exception("Failed to clean partial Qdrant version %s", version.id)
+            await self._record_failure(
+                job.id,
+                version.id,
+                attempt_count,
+                worker_id,
+                str(exc)[:2000],
+            )
+            raise
+
+    async def _claim(
+        self,
+        job_id: str,
+        worker_id: str,
+    ) -> tuple[KnowledgeDocumentVersion, KnowledgeIngestionJob, int] | None:
+        now = utcnow()
+        async with self._session_factory() as db:
+            result = await db.execute(
+                update(KnowledgeIngestionJob)
+                .where(
+                    KnowledgeIngestionJob.id == job_id,
+                    KnowledgeIngestionJob.state == "queued",
+                )
+                .values(
+                    state="running",
+                    worker_id=worker_id,
+                    started_at=now,
+                    finished_at=None,
+                    error=None,
+                )
+                .returning(KnowledgeIngestionJob.version_id, KnowledgeIngestionJob.retry_count)
+            )
+            row = result.one_or_none()
+            if row is None:
+                await db.rollback()
+                return None
+            version = await db.get(KnowledgeDocumentVersion, row.version_id)
+            job = await db.get(KnowledgeIngestionJob, job_id)
+            if version is None or job is None or version.status == "revoked":
                 if job is not None:
-                    job.state = "failed"
-                    job.error = str(exc)[:2000]
-                    job.retry_count += 1
-                if version is not None:
-                    db.add(KnowledgeAuditEvent(
-                        event_type="ingestion_failed",
-                        document_id=version.document_id,
-                        version_id=version.id,
-                        actor_role="system",
-                        detail={"error": str(exc)[:500]},
-                    ))
+                    job.state = "cancelled"
+                    job.finished_at = now
                 await db.commit()
+                return None
+            version.status = "parsing"
+            await db.commit()
+            return version, job, int(row.retry_count) + 1
+
+    async def _record_failure(
+        self,
+        job_id: str,
+        version_id: str,
+        attempt_count: int,
+        worker_id: str,
+        error: str,
+    ) -> None:
+        retrying = attempt_count < self._max_attempts
+        async with self._session_factory() as db:
+            version = await db.get(KnowledgeDocumentVersion, version_id)
+            job = await db.get(KnowledgeIngestionJob, job_id)
+            if job is None or job.state != "running" or job.worker_id != worker_id:
+                return
+            if version is not None and version.status != "revoked":
+                version.status = "draft"
+            job.state = "queued" if retrying else "failed"
+            job.error = error
+            job.retry_count += 1
+            job.worker_id = None
+            job.finished_at = None if retrying else utcnow()
+            if version is not None:
+                db.add(KnowledgeAuditEvent(
+                    event_type="ingestion_failed",
+                    document_id=version.document_id,
+                    version_id=version.id,
+                    actor_role="system",
+                    detail={"error": error[:500], "will_retry": retrying},
+                ))
+            await db.commit()
 
 
-async def _latest_job(db: AsyncSession, version_id: str) -> KnowledgeIngestionJob | None:
-    return (await db.execute(
-        select(KnowledgeIngestionJob)
-        .where(KnowledgeIngestionJob.version_id == version_id)
-        .order_by(KnowledgeIngestionJob.created_at.desc())
-        .limit(1)
-    )).scalar_one_or_none()
+class KnowledgeVectorSyncService:
+    """Execute durable, idempotent Qdrant activation/deletion jobs."""
+
+    def __init__(
+        self,
+        *,
+        vector_index: KnowledgeVectorIndex | None = None,
+        session_factory: async_sessionmaker[AsyncSession] = async_session_factory,
+    ) -> None:
+        self._vector_index = vector_index or knowledge_vector_index
+        self._session_factory = session_factory
+        self._max_attempts = settings.background_job_max_attempts
+
+    async def run(self, job_id: str, *, worker_id: str) -> bool:
+        claimed = await self._claim(job_id, worker_id)
+        if claimed is None:
+            return False
+        version_id, operation, attempt_count = claimed
+        try:
+            if operation == "activate":
+                await self._vector_index.activate_version(version_id)
+            elif operation == "delete":
+                await self._vector_index.delete_version(version_id)
+            else:
+                raise ValueError(f"Unsupported vector sync operation: {operation}")
+            async with self._session_factory() as db:
+                job = await db.get(KnowledgeVectorSyncJob, job_id)
+                if job is None or job.state != "running" or job.worker_id != worker_id:
+                    return False
+                job.state = "completed"
+                job.error = None
+                job.finished_at = utcnow()
+                await db.commit()
+            return True
+        except Exception as exc:
+            logger.exception("Knowledge vector sync failed: %s", job_id)
+            await self._record_failure(job_id, version_id, attempt_count, worker_id, str(exc)[:2000])
+            raise
+
+    async def _claim(self, job_id: str, worker_id: str) -> tuple[str, str, int] | None:
+        async with self._session_factory() as db:
+            result = await db.execute(
+                update(KnowledgeVectorSyncJob)
+                .where(
+                    KnowledgeVectorSyncJob.id == job_id,
+                    KnowledgeVectorSyncJob.state == "queued",
+                )
+                .values(
+                    state="running",
+                    worker_id=worker_id,
+                    started_at=utcnow(),
+                    finished_at=None,
+                    error=None,
+                    attempt_count=KnowledgeVectorSyncJob.attempt_count + 1,
+                )
+                .returning(
+                    KnowledgeVectorSyncJob.version_id,
+                    KnowledgeVectorSyncJob.operation,
+                    KnowledgeVectorSyncJob.attempt_count,
+                )
+            )
+            row = result.one_or_none()
+            await db.commit()
+        if row is None:
+            return None
+        return str(row.version_id), str(row.operation), int(row.attempt_count)
+
+    async def _record_failure(
+        self,
+        job_id: str,
+        version_id: str,
+        attempt_count: int,
+        worker_id: str,
+        error: str,
+    ) -> None:
+        retrying = attempt_count < self._max_attempts
+        async with self._session_factory() as db:
+            job = await db.get(KnowledgeVectorSyncJob, job_id)
+            if job is None or job.state != "running" or job.worker_id != worker_id:
+                return
+            job.state = "queued" if retrying else "failed"
+            job.error = error
+            job.worker_id = None
+            job.finished_at = None if retrying else utcnow()
+            version = await db.get(KnowledgeDocumentVersion, version_id)
+            db.add(KnowledgeAuditEvent(
+                event_type="vector_sync_failed",
+                version_id=version_id,
+                document_id=version.document_id if version is not None else None,
+                actor_role="system",
+                detail={"error": error[:500], "operation": job.operation, "will_retry": retrying},
+            ))
+            await db.commit()
 
 
 def storage_key_for(version_id: str, filename: str) -> str:
@@ -829,8 +1007,11 @@ knowledge_retrieval_service = KnowledgeRetrievalService(
     vector_index=knowledge_vector_index,
     embedding_service=embedding_service,
 )
-knowledge_ingestion_manager = KnowledgeIngestionManager(
+knowledge_ingestion_service = KnowledgeIngestionService(
     storage=knowledge_storage,
     vector_index=knowledge_vector_index,
     embedding_service=embedding_service,
+)
+knowledge_vector_sync_service = KnowledgeVectorSyncService(
+    vector_index=knowledge_vector_index,
 )

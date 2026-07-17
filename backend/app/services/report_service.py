@@ -1,16 +1,21 @@
-"""Background diagnosis report generation with per-session concurrency control."""
+"""Durable diagnosis report jobs executed by ARQ workers."""
+
+from __future__ import annotations
 
 import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional
+from datetime import datetime
+from typing import Callable, Dict, List
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.config import settings
 from app.db import async_session_factory
 from app.domain.schemas import CompletenessEval
-from app.models import DiagnosisSession
+from app.models import DiagnosisSession, ReportGenerationJob
 from app.repository import SessionRepository
 from app.services.model_service import DiagnosisModel, create_model
 from app.services.knowledge import (
@@ -47,7 +52,6 @@ class ReportContext:
             raw_facts = [f"{key}: {value}" for key, value in raw_facts.items()]
         if not isinstance(raw_facts, list):
             raw_facts = []
-
         return cls(
             session_id=session.id,
             raw_facts=raw_facts,
@@ -64,66 +68,55 @@ class ReportContext:
             ],
         )
 
+    def to_dict(self) -> dict:
+        return {
+            "session_id": self.session_id,
+            "raw_facts": self.raw_facts,
+            "completeness": self.completeness.model_dump(),
+            "scene": self.scene,
+            "messages": self.messages,
+        }
 
-class ReportTaskManager:
-    """Own report tasks and persist their completion independently of requests."""
+    @classmethod
+    def from_dict(cls, value: dict) -> "ReportContext":
+        return cls(
+            session_id=str(value["session_id"]),
+            raw_facts=list(value.get("raw_facts") or []),
+            completeness=CompletenessEval(**(value.get("completeness") or {})),
+            scene=dict(value.get("scene") or {}),
+            messages=list(value.get("messages") or []),
+        )
+
+
+class ReportJobService:
+    """Claim and execute report jobs with PostgreSQL-backed idempotency."""
 
     def __init__(
         self,
         *,
         model_factory: Callable[[], DiagnosisModel] = create_model,
         session_factory: async_sessionmaker[AsyncSession] = async_session_factory,
-    ):
+        max_attempts: int = settings.background_job_max_attempts,
+    ) -> None:
         self._model_factory = model_factory
         self._session_factory = session_factory
-        self._tasks: Dict[str, asyncio.Task[None]] = {}
+        self._max_attempts = max_attempts
 
-    async def startup(self) -> None:
-        async with self._session_factory() as db:
-            repo = SessionRepository.for_system(db)
-            await repo.reset_running_report_generations()
-            await db.commit()
-
-    def start(self, context: ReportContext) -> asyncio.Task[None]:
-        active = self._tasks.get(context.session_id)
-        if active and not active.done():
-            raise RuntimeError("该会话已有诊断报告正在生成")
-
-        task = asyncio.create_task(
-            self._generate(context),
-            name=f"report:{context.session_id}",
-        )
-        self._tasks[context.session_id] = task
-        task.add_done_callback(
-            lambda completed: self._remove(context.session_id, completed)
-        )
-        return task
-
-    async def cancel(self, session_id: str) -> None:
-        task = self._tasks.get(session_id)
-        if not task or task.done():
-            return
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-
-    async def shutdown(self) -> None:
-        tasks = [task for task in self._tasks.values() if not task.done()]
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-    def _remove(self, session_id: str, task: asyncio.Task[None]) -> None:
-        if self._tasks.get(session_id) is task:
-            self._tasks.pop(session_id, None)
-
-    async def _generate(self, context: ReportContext) -> None:
+    async def run(self, job_id: str, *, worker_id: str) -> bool:
+        claimed = await self._claim(job_id, worker_id)
+        if claimed is None:
+            return False
+        context, attempt_count = claimed
         try:
             model = self._model_factory()
             query = "\n".join([
                 context.scene.get("industry", ""),
                 *context.raw_facts,
-                *[message["content"] for message in context.messages[-8:] if message.get("role") == "user"],
+                *[
+                    message["content"]
+                    for message in context.messages[-8:]
+                    if message.get("role") == "user"
+                ],
             ])
             evidence = await knowledge_retrieval_service.retrieve(
                 query,
@@ -139,6 +132,9 @@ class ReportTaskManager:
             )
 
             async with self._session_factory() as db:
+                job = await db.get(ReportGenerationJob, job_id)
+                if job is None or job.state != "running" or job.worker_id != worker_id:
+                    return False
                 repo = SessionRepository.for_system(db)
                 markdown, selected = await validate_report_citations(db, markdown, evidence)
                 report = await repo.save_report(
@@ -156,31 +152,81 @@ class ReportTaskManager:
                     selected=selected,
                 )
                 await repo.finish_report_generation(context.session_id)
+                job.state = "completed"
+                job.error = None
+                job.finished_at = datetime.utcnow()
                 await db.commit()
-            logger.info("Background report generated for session %s", context.session_id)
+            logger.info("Report job completed: job_id=%s session_id=%s", job_id, context.session_id)
+            return True
         except asyncio.CancelledError:
-            await self._mark_failed(context.session_id, "报告生成任务已取消，请重新生成")
+            await self._record_failure(job_id, context.session_id, attempt_count, worker_id, "报告生成任务被中断")
             raise
-        except Exception:
-            logger.exception(
-                "Background report generation failed for session %s",
+        except Exception as exc:
+            logger.exception("Report job failed: %s", job_id)
+            await self._record_failure(
+                job_id,
                 context.session_id,
+                attempt_count,
+                worker_id,
+                str(exc)[:2000],
             )
-            await self._mark_failed(context.session_id, "诊断报告生成失败，请稍后重试")
+            raise
 
-    async def _mark_failed(self, session_id: str, message: str) -> None:
-        try:
-            async with self._session_factory() as db:
+    async def _claim(
+        self,
+        job_id: str,
+        worker_id: str,
+    ) -> tuple[ReportContext, int] | None:
+        now = datetime.utcnow()
+        async with self._session_factory() as db:
+            result = await db.execute(
+                update(ReportGenerationJob)
+                .where(
+                    ReportGenerationJob.id == job_id,
+                    ReportGenerationJob.state == "queued",
+                )
+                .values(
+                    state="running",
+                    worker_id=worker_id,
+                    started_at=now,
+                    finished_at=None,
+                    error=None,
+                    attempt_count=ReportGenerationJob.attempt_count + 1,
+                )
+                .returning(
+                    ReportGenerationJob.context_snapshot,
+                    ReportGenerationJob.attempt_count,
+                )
+            )
+            row = result.one_or_none()
+            await db.commit()
+        if row is None:
+            return None
+        return ReportContext.from_dict(row.context_snapshot), int(row.attempt_count)
+
+    async def _record_failure(
+        self,
+        job_id: str,
+        session_id: str,
+        attempt_count: int,
+        worker_id: str,
+        error: str,
+    ) -> None:
+        retrying = attempt_count < self._max_attempts
+        async with self._session_factory() as db:
+            job = await db.get(ReportGenerationJob, job_id)
+            if job is None or job.state != "running" or job.worker_id != worker_id:
+                return
+            job.state = "queued" if retrying else "failed"
+            job.error = error
+            job.worker_id = None
+            job.finished_at = None if retrying else datetime.utcnow()
+            if not retrying:
                 await SessionRepository.for_system(db).finish_report_generation(
                     session_id,
-                    error=message,
+                    error="诊断报告生成失败，请稍后重试",
                 )
-                await db.commit()
-        except Exception:
-            logger.exception(
-                "Failed to persist report task failure for session %s",
-                session_id,
-            )
+            await db.commit()
 
 
-report_task_manager = ReportTaskManager()
+report_job_service = ReportJobService()

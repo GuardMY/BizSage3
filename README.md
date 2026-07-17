@@ -1,235 +1,209 @@
-# BizSage3 — AI 运营诊断助手
+# BizSage3
 
-面向 AI 编码助手的多端协同控制系统，连接 VS Code 插件、本地 Host 服务与 Android 客户端，实现 Agent 会话的移动端查看与远程控制。系统支持局域网配对、会话同步、流式输出展示、指令下发与审批确认，并通过统一协议模型与适配器机制兼容不同类型的 Agent 工具。
+BizSage3 是一个面向企业经营场景的 AI 运营诊断助手。它通过引导式对话了解业务现状，整理运营事实和信息缺口，并生成可追溯的诊断报告与改进建议。
 
-## 核心功能
+## 核心能力
 
-- **会话管理** — VS Code 插件启动本地 Host 服务，完成 Agent 会话管理与移动端配对
-- **移动端接入** — Android 端通过二维码或 pairing JSON 接入桌面端服务，查看会话列表、实时输出与状态变化
-- **交互控制** — 移动端发送 Prompt、执行会话控制，并对高风险操作进行审批确认
-- **多端同步** — 通过共享协议层与适配器机制实现多端消息同步、断线恢复及 Codex 等多 Agent 扩展
-- **智能诊断** — 基于 LangGraph 构建的闭环工作流，自动识别行业场景、提取运营事实、评估信息完备度并生成结构化诊断报告
+- **引导式运营诊断**：识别行业、子行业、业务模式和经营阶段；从对话中提取运营事实，评估信息完备度，并持续提出下一步问题。
+- **流式对话与会话管理**：支持新建、切换和删除诊断会话；消息通过 SSE 流式返回，提供快捷回复，并以客户端消息 ID 保证幂等处理。
+- **异步报告生成**：报告任务在后台执行，生成期间仍可继续对话；报告以 Markdown 保存和展示，支持历史查看与下载。信息不足时会明确标出结论局限。
+- **行业知识库与引用**：管理员可维护带版本和标签的行业资料。已发布资料会参与诊断检索，报告和对话会展示经过服务端校验的引用证据。
+- **可选公开网络检索**：配置 Tavily 或 Bing 凭据后可启用公开网络检索；默认关闭，不会因为缺少搜索凭据影响普通诊断。
+- **访问控制**：管理员使用服务端令牌登录，可签发、撤销和删除临时访问令牌。普通用户的会话、消息和报告按令牌隔离。
 
-## 技术栈
+## 诊断流程
 
-| 层级 | 技术 |
-|------|------|
-| **后端框架** | FastAPI (Python 3.11+) |
-| **AI 编排** | LangGraph + LangChain |
-| **LLM** | OpenAI API (可替换) |
-| **数据库** | SQLite (aiosqlite, 异步驱动) |
-| **状态持久化** | LangGraph Checkpoint (SQLite) |
-| **前端框架** | Next.js 15 (React 19, TypeScript) |
-| **样式方案** | Tailwind CSS 4 |
-| **Markdown 渲染** | react-markdown |
-
-## 项目结构
-
-```
-BizSage3/
-├── backend/                     # FastAPI 后端
-│   └── app/
-│       ├── main.py              # 应用入口 & 生命周期管理
-│       ├── api.py               # REST API 路由（会话/消息/报告）
-│       ├── api_schemas.py       # API 请求/响应 Schema
-│       ├── models.py            # SQLAlchemy ORM 模型
-│       ├── repository.py        # 数据访问层
-│       ├── serializers.py       # ORM → API Schema 序列化
-│       ├── config.py            # 环境配置（pydantic-settings）
-│       ├── db.py                # 数据库连接
-│       ├── domain/
-│       │   ├── schemas.py       # 领域模型（场景识别、完备度评估等）
-│       │   └── catalog.py       # 指标定义目录
-│       └── services/
-│           ├── workflow.py      # LangGraph 对话诊断工作流
-│           └── model_service.py # LLM 模型调用封装
-├── frontend/                    # Next.js 前端
-│   └── src/
-│       ├── app/
-│       │   ├── layout.tsx       # 根布局
-│       │   ├── page.tsx         # 首页
-│       │   └── sessions/[sessionId]/page.tsx  # 诊断会话页（主工作区）
-│       ├── components/
-│       │   ├── AppShell.tsx     # 应用外壳布局
-│       │   ├── SessionSidebar.tsx  # 会话列表侧边栏
-│       │   ├── ChatPanel.tsx    # 对话面板
-│       │   ├── ChatInput.tsx    # 消息输入框
-│       │   ├── MessageBubble.tsx   # 消息气泡
-│       │   ├── ReportView.tsx   # 诊断报告视图
-│       │   ├── ProgressPanel.tsx   # 信息完备度进度面板
-│       │   └── ErrorBanner.tsx  # 错误提示横幅
-│       ├── hooks/
-│       │   ├── useSessions.ts   # 会话列表状态管理
-│       │   └── useDiagnosis.ts  # 诊断会话状态 & 消息交互
-│       ├── lib/
-│       │   └── api.ts           # 类型安全的 API 客户端
-│       └── types/
-│           └── index.ts         # TypeScript 类型定义
-├── raw-docs/                    # 原始设计文档
-└── CLAUDE.md                    # 项目开发指南
+```text
+START -> scene_recognize
+  |
+  +-> 未识别或需澄清业务场景 -> greeting_guide -> await_input -> scene_recognize
+  |
+  +-> 已识别业务场景 -> conversation_turn -> await_input -> conversation_turn
+                                                   |
+                                                   +-> 请求生成报告 -> generate_report -> END
 ```
 
-## LangGraph 工作流
+`conversation_turn` 会在一次回合内完成场景判断、事实提取、完备度评估、追问和快捷回复生成。诊断过程可按需使用已发布的行业知识库；公开网络检索仅在显式启用后可用。
 
-诊断工作流由 6 个节点组成的有向图驱动：
+## 架构
 
+```text
+Browser
+  |
+Nginx
+  +-- Next.js frontend
+  +-- FastAPI backend (3 replicas)
+         |
+         +-- PostgreSQL: 业务数据与 LangGraph checkpoint
+         +-- Redis: 会话锁与 ARQ 任务队列
+         +-- MinIO: 知识原件存储
+         +-- Qdrant: 知识向量检索
+         +-- OpenAI-compatible LLM and embedding APIs
+
+ARQ report worker / knowledge worker
+  +-- PostgreSQL, Redis, MinIO, Qdrant
 ```
-START → scene_recognize（场景识别）
-           ├─ 无行业 → greeting_guide（引导问候）→ await_input（等待输入）→ 重新识别
-           └─ 有行业 → chat_extract（事实提取 + LLM 完备度评估）
-                         → agent_reply（智能追问回复）
-                         → await_input（等待输入）
-                         → 循环回到 chat_extract
-                         → 强制诊断 → generate_report（报告生成）→ END
+
+| 层级 | 组件 |
+| --- | --- |
+| 前端 | Next.js 15、React 19、TypeScript、Tailwind CSS 4 |
+| 后端 | FastAPI、SQLAlchemy Async、Alembic、Python 3.11+ |
+| AI 工作流 | LangGraph、LangChain、OpenAI-compatible API |
+| 数据与任务 | PostgreSQL、Redis、ARQ、MinIO、Qdrant |
+| 部署入口 | Docker Compose、Nginx |
+
+## 快速开始
+
+推荐使用 Docker Compose 启动完整环境。需要 Docker Engine 或 Docker Desktop、Docker Compose v2，以及可用的 OpenAI-compatible API 凭据。
+
+### 1. 配置后端凭据
+
+从示例创建 `backend/.env`：
+
+```powershell
+# PowerShell
+Copy-Item backend\.env.example backend\.env
 ```
-
-### 关键设计
-
-- **人机交互暂停** — 使用 LangGraph `interrupt()` 在信息收集与报告生成之间暂停，等待用户回复或确认
-- **并发控制** — 基于 `asyncio.Lock` 的 per-session 锁防止同一会话重复提交
-- **后台报告** — 报告生成独立于对话请求执行；单会话同时只允许一个任务，历史报告全部保留
-- **幂等性保证** — 通过 `client_message_id` 唯一约束防止消息重复处理
-- **状态持久化** — LangGraph Checkpoint 将图状态写入 SQLite，支持断线恢复和重放
-
-## Docker Compose 部署
-
-首次部署先创建后端环境文件，并至少填写 `OPENAI_API_KEY` 和 `ADMIN_TOKEN`：
 
 ```bash
+# macOS/Linux/Git Bash
 cp backend/.env.example backend/.env
 ```
 
-构建并启动服务：
+至少填写以下两项：
+
+```dotenv
+OPENAI_API_KEY=your-api-key
+ADMIN_TOKEN=use-a-long-random-admin-token
+```
+
+完整配置项见 [`backend/.env.example`](backend/.env.example)。使用 Compose 时，数据库、Redis、MinIO 和 Qdrant 的连接地址会由 [`compose.yaml`](compose.yaml) 覆盖为容器内地址。
+
+### 2. 配置 Compose 密码
+
+在仓库根目录新建 `.env`。这个文件没有模板，不应在生产环境中使用 Compose 内置的示例密码：
+
+```dotenv
+POSTGRES_PASSWORD=use-a-long-random-postgres-password
+MINIO_ROOT_USER=bizsage-minio
+MINIO_ROOT_PASSWORD=use-a-long-random-minio-password
+APP_PORT=3000
+```
+
+`APP_PORT` 可改为其他宿主机端口，例如 `8080`。
+
+### 3. 构建并启动
+
+在仓库根目录执行：
 
 ```bash
+docker compose config --quiet
 docker compose up -d --build
 docker compose ps
 ```
 
-启动完成后访问 <http://localhost:3000>。宿主机只暴露 Nginx；Nginx 将页面请求转发到
-Next.js，并在 Compose 内部网络中将 `/api/*` 请求直接转发到 FastAPI。后端启动时会自动
-执行数据库迁移。API 代理已关闭缓冲并延长读取超时，可直接承载聊天 SSE 流。
+首次启动时，`migrate` 服务会执行数据库迁移和 LangGraph checkpoint 初始化。它成功后显示 `Exited (0)` 是正常状态；API 和 Worker 会等待迁移完成再启动。
 
-默认宿主机端口为 `3000`。如需修改，可在项目根目录创建 `.env`：
+打开 `http://localhost:3000/login`，使用 `ADMIN_TOKEN` 登录。若修改了 `APP_PORT`，请替换 URL 中的端口。
 
-```dotenv
-APP_PORT=8080
-```
-
-行业知识库会随 Compose 启动 MinIO 和 Qdrant，并通过内部网络提供原件存储与向量检索。生产环境请在项目根目录 `.env` 中设置独立的 MinIO 管理凭据：
-
-```dotenv
-MINIO_ROOT_USER=bizsage-minio
-MINIO_ROOT_PASSWORD=replace-with-a-long-random-password
-```
-
-嵌入默认复用 `backend/.env` 中的 `OPENAI_API_KEY`、`OPENAI_BASE_URL` 与 `text-embedding-3-small`；可通过 `EMBEDDING_API_KEY`、`EMBEDDING_BASE_URL`、`EMBEDDING_MODEL` 和 `EMBEDDING_DIMENSIONS` 单独覆盖。资料原件仅限 DOCX、Markdown 和 TXT，单个文件最大 20 MB。
-
-镜像构建默认使用清华 PyPI 和 npmmirror。如需切换到其他镜像，可在项目根目录的
-`.env` 中覆盖：
-
-```dotenv
-PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-NPM_REGISTRY=https://registry.npmmirror.com
-```
-
-Dockerfile 使用固定版本的生产运行时，并通过 BuildKit 缓存复用 pip、npm 和 Next.js
-编译产物。Nginx 负责 gzip、静态资源转发、安全响应头和统一健康检查。日常更新直接执行
-`docker compose up -d --build` 即可；不要常规添加 `--no-cache`，否则会跳过这些缓存。
-
-常用运维命令：
+### 4. 验证服务
 
 ```bash
-docker compose logs -f
-docker compose up -d --build   # 拉取代码后重新构建并重建服务
-docker compose down            # 停止服务，保留数据
+docker compose ps
+docker compose logs migrate --tail=100
+docker compose logs backend report-worker knowledge-worker --tail=100
+curl -fsS http://localhost:3000/nginx-health
 ```
 
-业务数据库和 LangGraph 检查点保存在 `bizsage-data` 命名卷中。仅在确认不再需要数据时
-使用 `docker compose down -v`。当前 Nginx 监听 HTTP，公网部署时应在云负载均衡、CDN
-或入口网关终止 TLS；同时在 `backend/.env` 中设置 `AUTH_COOKIE_SECURE=true`。
+默认只有 Nginx 对宿主机暴露端口。后端的 `/health/live` 和 `/health/ready` 适合直接暴露 API 的开发或运维环境使用；`/health/ready` 会检查 PostgreSQL 和 Redis。
 
-## 本地开发
+## 使用与管理
 
-### 环境要求
+### 访问令牌
 
-- Python 3.11+
-- Node.js 20+
-- OpenAI API Key
+管理员使用 `ADMIN_TOKEN` 登录后，可在管理区创建带有效期的临时访问令牌。完整临时令牌只在创建时返回一次，数据库仅保存其 SHA-256 摘要。撤销或删除令牌不会删除既有会话；相关历史会话会转为仅管理员可见。
 
-### 后端
+### 行业知识库
 
-```bash
+管理员可上传 DOCX、Markdown 或 TXT 文件，单个文件最大 20 MB。资料可按行业、子行业、业务模式和经营阶段加标签，并经过异步解析、分块和向量化后发布。只有有效的已发布版本参与检索；撤回后不再向诊断对话和报告提供内容。
+
+默认使用 `OPENAI_API_KEY`、`OPENAI_BASE_URL` 和 `text-embedding-3-small` 生成嵌入。可通过 `EMBEDDING_API_KEY`、`EMBEDDING_BASE_URL`、`EMBEDDING_MODEL` 和 `EMBEDDING_DIMENSIONS` 单独配置。变更向量维度后需要重建知识向量。
+
+### 可选公开网络检索
+
+要启用公开网络检索，在 `backend/.env` 中设置：
+
+```dotenv
+WEB_SEARCH_ENABLED=true
+TAVILY_API_KEY=your-tavily-key
+# 或配置 BING_SEARCH_API_KEY
+```
+
+可用提供商、超时和结果数量等完整配置见 [`backend/.env.example`](backend/.env.example)。
+
+## 开发与检查
+
+后端测试：
+
+```powershell
 cd backend
 python -m venv .venv
-source .venv/Scripts/activate  # Windows
-# source .venv/bin/activate    # macOS/Linux
-pip install -e ".[dev]"
-
-# 配置环境变量
-cp .env.example .env
-# 编辑 .env 填入 OPENAI_API_KEY
-
-# 升级数据库结构
-alembic upgrade head
-
-# 启动服务 (http://localhost:8000)
-uvicorn app.main:app --reload
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+python -m pytest
 ```
 
-### 前端
+前端静态检查与生产构建：
 
 ```bash
 cd frontend
-npm install
+npm ci
+npm run typecheck
+npm run build
+```
 
-# 启动开发服务器 (http://localhost:3000)
+后端在宿主机直接运行时，需要先按 `backend/.env` 配置可访问的 PostgreSQL、Redis、MinIO 和 Qdrant：
+
+```bash
+cd backend
+uvicorn app.main:app --reload
+```
+
+前端开发服务器默认将 `/api/*` 转发到 `http://localhost:8000`：
+
+```bash
+cd frontend
 npm run dev
 ```
 
-### API 端点概览
+## 运维说明
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/api/v1/sessions` | 获取会话列表 |
-| `POST` | `/api/v1/sessions` | 创建新会话 |
-| `GET` | `/api/v1/sessions/{id}` | 获取会话详情 |
-| `DELETE` | `/api/v1/sessions/{id}` | 删除会话 |
-| `POST` | `/api/v1/sessions/{id}/messages` | 发送消息 / 触发诊断 |
-| `POST` | `/api/v1/sessions/{id}/reports` | 后台生成诊断报告；已有任务时返回 409 |
-| `GET` | `/api/v1/sessions/{id}/reports` | 倒序获取全部诊断报告 |
-| `GET` | `/api/v1/sessions/{id}/reports/{report_id}` | 获取指定诊断报告 |
-| `GET` | `/api/v1/sessions/{id}/reports/{report_id}/download` | 下载指定 Markdown 报告 |
+```bash
+docker compose up -d --build      # 更新代码后重新构建并启动
+docker compose logs -f            # 跟踪全部服务日志
+docker compose down               # 停止服务，保留数据卷
+docker compose down --volumes     # 删除 PostgreSQL、Redis、MinIO、Qdrant 数据
+```
 
-## 配置项
+清空知识原件和向量是破坏性操作，仅在已确认不再需要这些资料时执行：
 
-通过 `.env` 文件或环境变量配置：
+```bash
+docker compose run --rm backend python -m app.maintenance reset-knowledge --confirm-reset
+```
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `DATABASE_URL` | 主数据库连接 | `sqlite+aiosqlite:///bizsage.db` |
-| `CHECKPOINT_DB_URL` | LangGraph 检查点数据库 | `sqlite+aiosqlite:///checkpoints.db` |
-| `OPENAI_API_KEY` | OpenAI API 密钥 | - |
-| `OPENAI_BASE_URL` | API 基础 URL | `https://api.openai.com/v1` |
-| `LLM_MODEL` | 模型名称 | `gpt-3.5-turbo` |
-| `COMPLETE_THRESHOLD` | 信息完备度阈值 | `80` |
-| `CORS_ORIGINS` | 允许的前端域名 | `http://localhost:3000` |
-| `ADMIN_TOKEN` | 服务端管理员令牌（必填） | - |
-| `AUTH_SESSION_HOURS` | 登录会话有效时长 | `12` |
-| `AUTH_COOKIE_SECURE` | 是否仅通过 HTTPS 发送登录 Cookie | `false` |
+公网部署应在负载均衡器、CDN 或入口网关终止 TLS，并在 `backend/.env` 中设置：
 
-## 访问控制
+```dotenv
+AUTH_COOKIE_SECURE=true
+```
 
-启动 API 前，在 `backend/.env` 中设置 `ADMIN_TOKEN`。该值仅保留在服务端，用于
-登录管理员界面。管理员可签发带有效期、可随时撤销的临时令牌；数据库只保存令牌的
-SHA-256 摘要，完整令牌仅在创建成功时返回一次。
+构建镜像默认使用清华 PyPI 与 npmmirror。必要时可在根目录 `.env` 中通过 `PIP_INDEX_URL` 和 `NPM_REGISTRY` 覆盖。
 
-临时令牌创建的会话按令牌隔离：普通用户只能查看和操作同一令牌创建的会话、消息和
-报告，管理员可以查看全部会话。升级前已有的会话以及管理员创建的会话仅管理员可见。
-删除已撤销的临时令牌不会删除其历史会话，历史会话会转为仅管理员可见。
+## 设计文档
 
-HTTPS 部署还需设置 `AUTH_COOKIE_SECURE=true`。更新后运行 `alembic upgrade head`
-创建临时令牌表并增加会话所有者字段。
+- [行业知识库与引用展示设计方案](docs/BizSage3-行业知识库与引用展示设计方案.md)
+- [PostgreSQL 与分布式任务架构迁移方案](docs/BizSage3-PostgreSQL与分布式任务架构迁移方案.md)
+- [运营诊断 Agent 工作流原始设计](raw-docs/运营诊断Agent%20LangGraph闭环工作流%20核心实现代码（详细注释）.md)
 
 ## License
 

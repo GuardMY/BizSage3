@@ -7,8 +7,27 @@ class Settings(BaseSettings):
     """BizSage3 configuration, populated from .env file and environment."""
 
     # Database
-    database_url: str = "sqlite+aiosqlite:///bizsage.db"
-    checkpoint_db_url: str = "sqlite+aiosqlite:///checkpoints.db"
+    database_url: str = "postgresql+asyncpg://bizsage_app:bizsage@localhost:5432/bizsage"
+    checkpoint_db_url: str = "postgresql://bizsage_app:bizsage@localhost:5432/bizsage_checkpoint"
+    checkpoint_setup_on_start: bool = False
+    db_pool_size: int = 10
+    db_max_overflow: int = 5
+    db_pool_timeout_seconds: float = 10.0
+    db_pool_recycle_seconds: int = 1800
+    db_application_name: str = "bizsage-api"
+    db_statement_timeout_ms: int = 30000
+    db_idle_transaction_timeout_ms: int = 60000
+    checkpoint_pool_size: int = 5
+
+    # Distributed coordination and background jobs.
+    redis_url: str = "redis://localhost:6379/0"
+    session_lock_ttl_seconds: int = 120
+    report_queue_name: str = "arq:report"
+    knowledge_queue_name: str = "arq:knowledge"
+    report_worker_concurrency: int = 4
+    knowledge_worker_concurrency: int = 2
+    background_job_max_attempts: int = 3
+    background_job_stale_seconds: int = 900
 
     # LLM
     openai_api_key: str = ""

@@ -1,27 +1,136 @@
+x-backend-environment: &backend-environment
+  DATABASE_URL: postgresql+asyncpg://bizsage_app:${POSTGRES_PASSWORD:-replace-this-postgres-password}@postgres:5432/bizsage
+  CHECKPOINT_DB_URL: postgresql://bizsage_app:${POSTGRES_PASSWORD:-replace-this-postgres-password}@postgres:5432/bizsage_checkpoint
+  CHECKPOINT_SETUP_ON_START: "false"
+  REDIS_URL: redis://redis:6379/0
+  QDRANT_URL: http://qdrant:6333
+  MINIO_ENDPOINT: minio:9000
+  MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-bizsage-minio}
+  MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-replace-this-minio-password}
+
+x-backend-build: &backend-build
+  context: ./backend
+  args:
+    PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+
 services:
-  backend:
-    build:
-      context: ./backend
-      args:
-        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+  postgres:
+    image: postgres:18.1-alpine3.23
+    environment:
+      POSTGRES_DB: bizsage
+      POSTGRES_USER: bizsage_app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-replace-this-postgres-password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bizsage_app -d bizsage"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4.7-alpine
+    command: redis-server --appendonly yes --appendfsync everysec
+    volumes:
+      - redis-data:/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    build: *backend-build
     env_file:
       - ./backend/.env
     environment:
-      DATABASE_URL: sqlite+aiosqlite:////data/bizsage.db
-      CHECKPOINT_DB_URL: sqlite+aiosqlite:////data/checkpoints.db
-      QDRANT_URL: http://qdrant:6333
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-bizsage-minio}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-replace-this-minio-password}
-    volumes:
-      - bizsage-data:/data
+      <<: *backend-environment
+      DB_APPLICATION_NAME: bizsage-migrate
+    command: ["sh", "-c", "alembic upgrade head && python -m app.checkpoint_setup"]
     depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: "no"
+
+  backend:
+    build: *backend-build
+    env_file:
+      - ./backend/.env
+    environment:
+      <<: *backend-environment
+      DB_APPLICATION_NAME: bizsage-api
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
       qdrant:
         condition: service_healthy
       minio:
         condition: service_healthy
     expose:
       - "8000"
+    deploy:
+      replicas: 3
+    init: true
+    restart: unless-stopped
+
+  report-worker:
+    build: *backend-build
+    env_file:
+      - ./backend/.env
+    environment:
+      <<: *backend-environment
+      DB_APPLICATION_NAME: bizsage-report-worker
+    command: ["arq", "app.worker.ReportWorkerSettings"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "arq", "--check", "app.worker.ReportWorkerSettings"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    init: true
+    restart: unless-stopped
+
+  knowledge-worker:
+    build: *backend-build
+    env_file:
+      - ./backend/.env
+    environment:
+      <<: *backend-environment
+      DB_APPLICATION_NAME: bizsage-knowledge-worker
+    command: ["arq", "app.worker.KnowledgeWorkerSettings"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "arq", "--check", "app.worker.KnowledgeWorkerSettings"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     init: true
     restart: unless-stopped
 
@@ -87,6 +196,7 @@ services:
     restart: unless-stopped
 
 volumes:
-  bizsage-data:
+  postgres-data:
+  redis-data:
   minio-data:
   qdrant-data:

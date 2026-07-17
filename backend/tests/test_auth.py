@@ -242,13 +242,6 @@ async def test_sessions_are_isolated_by_temporary_token(
             )
         ).status_code == 200
 
-    cancelled = []
-
-    async def record_cancel(session_id: str) -> None:
-        cancelled.append(session_id)
-
-    monkeypatch.setattr("app.api.report_task_manager.cancel", record_cancel)
-
     async with AsyncClient(transport=transport, base_url="http://test") as user_b:
         await user_b.post(
             "/api/v1/auth/login",
@@ -287,7 +280,6 @@ async def test_sessions_are_isolated_by_temporary_token(
             ),
         ]
         assert {response.status_code for response in inaccessible_requests} == {404}
-        assert cancelled == []
 
     async with AsyncClient(transport=transport, base_url="http://test") as admin:
         await admin.post(

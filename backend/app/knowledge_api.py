@@ -1,15 +1,15 @@
 """Authenticated APIs for administering and consuming platform knowledge."""
 
-import asyncio
 import io
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Annotated
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import HTMLResponse, StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -25,10 +25,10 @@ from app.knowledge_schemas import (
 from app.models import (
     DiagnosisSession,
     KnowledgeAuditEvent,
-    KnowledgeChunk,
     KnowledgeDocument,
     KnowledgeDocumentVersion,
     KnowledgeIngestionJob,
+    KnowledgeVectorSyncJob,
     Report,
     ReportEvidence,
 )
@@ -36,9 +36,7 @@ from app.services.knowledge import (
     SOURCE_TYPES,
     content_type_for,
     extension_for,
-    knowledge_ingestion_manager,
     knowledge_storage,
-    knowledge_vector_index,
     parse_document,
     parse_tags,
     safe_filename,
@@ -46,6 +44,7 @@ from app.services.knowledge import (
     storage_key_for,
     utcnow,
 )
+from app.services.task_queue import task_queue
 
 logger = logging.getLogger(__name__)
 
@@ -151,10 +150,10 @@ def _validate_source_type(value: str) -> str:
     return value
 
 
-async def _create_version(
-    db: AsyncSession,
+async def _prepare_version(
     *,
-    document: KnowledgeDocument,
+    document_id: str,
+    version_no: int,
     file: UploadFile,
     source_type: str,
     industry_tags: str,
@@ -164,10 +163,10 @@ async def _create_version(
 ) -> KnowledgeDocumentVersion:
     source_type = _validate_source_type(source_type)
     filename, content, content_type = await _read_upload(file)
-    next_version = max((item.version_no for item in (document.versions or [])), default=0) + 1
     version = KnowledgeDocumentVersion(
-        document_id=document.id,
-        version_no=next_version,
+        id=uuid.uuid4().hex,
+        document_id=document_id,
+        version_no=version_no,
         original_filename=filename,
         content_type=content_type,
         source_type=source_type,
@@ -179,13 +178,32 @@ async def _create_version(
         business_mode_tags=parse_tags(business_mode_tags),
         operating_stage_tags=parse_tags(operating_stage_tags),
     )
-    db.add(version)
-    await db.flush()
     version.storage_key = storage_key_for(version.id, filename)
     await knowledge_storage.put(version.storage_key, content, content_type)
-    job = KnowledgeIngestionJob(version_id=version.id, state="queued")
-    db.add(job)
     return version
+
+
+async def _remove_orphaned_upload(storage_key: str) -> None:
+    try:
+        await knowledge_storage.delete(storage_key)
+    except Exception:
+        logger.exception("Failed to remove orphaned knowledge object: %s", storage_key)
+
+
+async def _enqueue_ingestion(job_id: str) -> None:
+    try:
+        await task_queue.enqueue_ingestion(job_id)
+    except Exception:
+        # The durable queued row is reconciled by the worker.
+        logger.exception("Failed to enqueue knowledge ingestion job: %s", job_id)
+
+
+async def _enqueue_vector_sync_jobs(job_ids: list[str]) -> None:
+    for job_id in job_ids:
+        try:
+            await task_queue.enqueue_vector_sync(job_id)
+        except Exception:
+            logger.exception("Failed to enqueue knowledge vector sync job: %s", job_id)
 
 
 async def _load_document(db: AsyncSession, document_id: str) -> KnowledgeDocument | None:
@@ -249,12 +267,10 @@ async def create_knowledge_document(
     clean_title = title.strip()
     if not clean_title:
         raise HTTPException(status_code=422, detail="资料标题不能为空")
-    document = KnowledgeDocument(title=clean_title, status="draft")
-    db.add(document)
-    await db.flush()
-    version = await _create_version(
-        db,
-        document=document,
+    document = KnowledgeDocument(id=uuid.uuid4().hex, title=clean_title, status="draft")
+    version = await _prepare_version(
+        document_id=document.id,
+        version_no=1,
         file=file,
         source_type=source_type,
         industry_tags=industry_tags,
@@ -262,10 +278,17 @@ async def create_knowledge_document(
         business_mode_tags=business_mode_tags,
         operating_stage_tags=operating_stage_tags,
     )
-    _audit(db, "document_uploaded", document_id=document.id, version_id=version.id, detail={"filename": version.original_filename})
-    await db.commit()
+    job = KnowledgeIngestionJob(id=uuid.uuid4().hex, version_id=version.id, state="queued")
+    try:
+        db.add_all([document, version, job])
+        _audit(db, "document_uploaded", document_id=document.id, version_id=version.id, detail={"filename": version.original_filename})
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        await _remove_orphaned_upload(version.storage_key)
+        raise
     loaded = await _load_document(db, document.id)
-    knowledge_ingestion_manager.start(version.id)
+    await _enqueue_ingestion(job.id)
     return _document_response(loaded or document)
 
 
@@ -288,9 +311,10 @@ async def create_knowledge_document_version(
     document = await _load_document(db, document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="资料不存在")
-    version = await _create_version(
-        db,
-        document=document,
+    await db.rollback()
+    version = await _prepare_version(
+        document_id=document_id,
+        version_no=0,
         file=file,
         source_type=source_type,
         industry_tags=industry_tags,
@@ -298,11 +322,30 @@ async def create_knowledge_document_version(
         business_mode_tags=business_mode_tags,
         operating_stage_tags=operating_stage_tags,
     )
-    _audit(db, "version_uploaded", document_id=document.id, version_id=version.id, detail={"version_no": version.version_no})
-    await db.commit()
-    loaded = await _load_document(db, document.id)
-    knowledge_ingestion_manager.start(version.id)
-    return _document_response(loaded or document)
+    job = KnowledgeIngestionJob(id=uuid.uuid4().hex, version_id=version.id, state="queued")
+    try:
+        locked_document = (await db.execute(
+            select(KnowledgeDocument)
+            .where(KnowledgeDocument.id == document_id)
+            .with_for_update()
+        )).scalar_one_or_none()
+        if locked_document is None:
+            raise HTTPException(status_code=404, detail="资料不存在")
+        version.version_no = int((await db.execute(
+            select(func.max(KnowledgeDocumentVersion.version_no)).where(
+                KnowledgeDocumentVersion.document_id == document_id
+            )
+        )).scalar_one() or 0) + 1
+        db.add_all([version, job])
+        _audit(db, "version_uploaded", document_id=document_id, version_id=version.id, detail={"version_no": version.version_no})
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        await _remove_orphaned_upload(version.storage_key)
+        raise
+    loaded = await _load_document(db, document_id)
+    await _enqueue_ingestion(job.id)
+    return _document_response(loaded or locked_document)
 
 
 @router.post(
@@ -324,11 +367,16 @@ async def retry_knowledge_ingestion(
         job = KnowledgeIngestionJob(version_id=version.id, state="queued")
         db.add(job)
     else:
+        if job.state == "running":
+            raise HTTPException(status_code=409, detail="知识入库任务正在执行")
         job.state = "queued"
         job.error = None
+        job.worker_id = None
+        job.started_at = None
+        job.finished_at = None
     _audit(db, "ingestion_retried", document_id=version.document_id, version_id=version.id)
     await db.commit()
-    knowledge_ingestion_manager.start(version.id)
+    await _enqueue_ingestion(job.id)
     refreshed = await _load_version(db, version.id)
     return _version_response(refreshed or version)
 
@@ -364,6 +412,22 @@ async def publish_knowledge_version(
     version.effective_to = None
     version.document.current_version_id = version.id
     version.document.status = "published"
+    sync_jobs = [
+        KnowledgeVectorSyncJob(
+            id=uuid.uuid4().hex,
+            version_id=prior.id,
+            operation="delete",
+            state="queued",
+        )
+        for prior in prior_versions
+    ]
+    sync_jobs.append(KnowledgeVectorSyncJob(
+        id=uuid.uuid4().hex,
+        version_id=version.id,
+        operation="activate",
+        state="queued",
+    ))
+    db.add_all(sync_jobs)
     _audit(
         db,
         "version_published",
@@ -372,14 +436,7 @@ async def publish_knowledge_version(
         detail={"superseded_version_ids": [item.id for item in prior_versions]},
     )
     await db.commit()
-    try:
-        for prior in prior_versions:
-            await knowledge_vector_index.delete_version(prior.id)
-        await knowledge_vector_index.activate_version(version.id)
-    except Exception:
-        logger.exception("Qdrant sync failed after publishing %s", version.id)
-        async with db.begin():
-            _audit(db, "vector_sync_failed", document_id=version.document_id, version_id=version.id)
+    await _enqueue_vector_sync_jobs([job.id for job in sync_jobs])
     refreshed = await _load_version(db, version.id)
     return _version_response(refreshed or version)
 
@@ -403,12 +460,16 @@ async def revoke_knowledge_version(
     if version.document.current_version_id == version.id:
         version.document.current_version_id = None
         version.document.status = "revoked"
+    sync_job = KnowledgeVectorSyncJob(
+        id=uuid.uuid4().hex,
+        version_id=version.id,
+        operation="delete",
+        state="queued",
+    )
+    db.add(sync_job)
     _audit(db, "version_revoked", document_id=version.document_id, version_id=version.id)
     await db.commit()
-    try:
-        await knowledge_vector_index.delete_version(version.id)
-    except Exception:
-        logger.exception("Qdrant cleanup failed after revoking %s", version.id)
+    await _enqueue_vector_sync_jobs([sync_job.id])
     return None
 
 
@@ -435,6 +496,7 @@ async def preview_knowledge_original(
     version = await _public_version_access(db, version_id, principal)
     if version.document_id != document_id:
         raise HTTPException(status_code=404, detail="资料版本不存在")
+    await db.commit()
     content = await knowledge_storage.get(version.storage_key)
     parsed = parse_document(version.original_filename, content)
     _audit(db, "original_previewed", document_id=document_id, version_id=version.id, actor_role=principal.role)
@@ -452,6 +514,7 @@ async def download_knowledge_original(
     version = await _public_version_access(db, version_id, principal)
     if version.document_id != document_id:
         raise HTTPException(status_code=404, detail="资料版本不存在")
+    await db.commit()
     content = await knowledge_storage.get(version.storage_key)
     _audit(db, "original_downloaded", document_id=document_id, version_id=version.id, actor_role=principal.role)
     await db.commit()

@@ -12,7 +12,9 @@ from sqlalchemy import (
     Text,
     Boolean,
     JSON,
+    Index,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -109,6 +111,38 @@ class Report(Base):
         order_by="ReportEvidence.evidence_no",
         cascade="all, delete-orphan",
     )
+
+
+class ReportGenerationJob(Base):
+    """Durable report job; Redis only transports its identifier."""
+
+    __tablename__ = "report_generation_jobs"
+    __table_args__ = (
+        Index(
+            "uq_report_generation_jobs_active_session",
+            "session_id",
+            unique=True,
+            postgresql_where=text("state IN ('queued', 'running')"),
+            sqlite_where=text("state IN ('queued', 'running')"),
+        ),
+    )
+
+    id = Column(String, primary_key=True, default=_new_id)
+    session_id = Column(
+        String,
+        ForeignKey("diagnosis_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    state = Column(String(32), nullable=False, default="queued", index=True)
+    context_snapshot = Column(JSON, nullable=False, default=dict)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    error = Column(Text, nullable=True)
+    worker_id = Column(String(128), nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
 
 
 class KnowledgeDocument(Base):
@@ -223,11 +257,32 @@ class KnowledgeIngestionJob(Base):
     parser = Column(String(64), nullable=True)
     error = Column(Text, nullable=True)
     retry_count = Column(Integer, nullable=False, default=0)
+    worker_id = Column(String(128), nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
     indexed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
 
     version = relationship("KnowledgeDocumentVersion", back_populates="ingestion_jobs")
+
+
+class KnowledgeVectorSyncJob(Base):
+    """Durable activation or deletion request for one Qdrant version."""
+
+    __tablename__ = "knowledge_vector_sync_jobs"
+
+    id = Column(String, primary_key=True, default=_new_id)
+    version_id = Column(String, nullable=False, index=True)
+    operation = Column(String(32), nullable=False)
+    state = Column(String(32), nullable=False, default="queued", index=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    error = Column(Text, nullable=True)
+    worker_id = Column(String(128), nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
 
 
 class ReportEvidence(Base):

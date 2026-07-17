@@ -18,7 +18,7 @@ from app.models import (
 from app.repository import SessionRepository
 from app.services.knowledge import (
     EvidenceContext,
-    KnowledgeIngestionManager,
+    KnowledgeIngestionService,
     KnowledgeRetrievalService,
     evidence_from_state,
     evidence_to_state,
@@ -104,13 +104,17 @@ async def test_ingestion_creates_reviewable_chunks(knowledge_db_factory):
         version_id = version.id
 
     vectors = FakeVectorIndex()
-    manager = KnowledgeIngestionManager(
+    service = KnowledgeIngestionService(
         storage=FakeStorage("# 转化诊断\n\n菜单曝光下降时，先检查曝光到下单的漏斗。".encode()),
         vector_index=vectors,
         embedding_service=FakeEmbedder(),
         session_factory=knowledge_db_factory,
     )
-    await manager._ingest(version_id)
+    async with knowledge_db_factory() as db:
+        job_id = (await db.execute(
+            select(KnowledgeIngestionJob.id).where(KnowledgeIngestionJob.version_id == version_id)
+        )).scalar_one()
+    await service.run(job_id, worker_id="test-worker")
 
     async with knowledge_db_factory() as db:
         version = await db.get(KnowledgeDocumentVersion, version_id)
@@ -123,6 +127,7 @@ async def test_ingestion_creates_reviewable_chunks(knowledge_db_factory):
 
     assert version.status == "pending_review"
     assert job.state == "completed"
+    assert job.worker_id == "test-worker"
     assert chunks and "曝光到下单" in chunks[0].content
     assert vectors.indexed == [(version_id, len(chunks))]
 

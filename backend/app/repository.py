@@ -5,10 +5,10 @@ import uuid
 from typing import TYPE_CHECKING, Optional, List
 from datetime import datetime
 
-from sqlalchemy import select, delete, func, update
+from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import DiagnosisSession, Message, Report
+from app.models import DiagnosisSession, Message, Report, ReportGenerationJob
 
 if TYPE_CHECKING:
     from app.auth import Principal
@@ -318,6 +318,24 @@ class SessionRepository:
         result = await self.db.execute(stmt)
         await self.db.flush()
         return result.rowcount == 1
+
+    async def create_report_generation_job(
+        self,
+        session_id: str,
+        context_snapshot: dict,
+    ) -> ReportGenerationJob | None:
+        """Reserve the per-session slot and create its durable job atomically."""
+        if not await self.try_start_report_generation(session_id):
+            return None
+        job = ReportGenerationJob(
+            id=_new_id(),
+            session_id=session_id,
+            state="queued",
+            context_snapshot=context_snapshot,
+        )
+        self.db.add(job)
+        await self.db.flush()
+        return job
 
     async def finish_report_generation(
         self,
