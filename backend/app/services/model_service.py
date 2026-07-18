@@ -318,12 +318,7 @@ class OpenAICompatibleModel(DiagnosisModel):
         scene: Dict[str, str],
         evidence: Optional[List[EvidenceContext]] = None,
     ) -> ConversationTurnOutput:
-        """Single LLM call: extract facts, evaluate completeness, generate reply
-        and quick-reply suggestions — all in one turn.
-
-        The model can make at most two tool decisions. A final, unbound call is
-        used only when the second decision also produced tool calls.
-        """
+        """Run tool decisions, then generate a validated JSON conversation turn."""
         industry = scene.get("industry", "未知行业")
         existing_text = "\n".join(f"- {f}" for f in existing_facts) if existing_facts else "（无）"
         recent = messages[-20:] if len(messages) > 20 else messages
@@ -390,7 +385,6 @@ class OpenAICompatibleModel(DiagnosisModel):
                 HumanMessage(content=f"对话历史：{history_text}"),
             ]
             tool_llm = self.llm.bind_tools(CONVERSATION_TOOL_SCHEMAS)
-            response = None
 
             for _ in range(2):
                 _trace_llm_request(
@@ -413,20 +407,15 @@ class OpenAICompatibleModel(DiagnosisModel):
                         content=tool_content,
                         tool_call_id=str(tool_call.get("id") or tool_name),
                     ))
-            else:
-                # The tool decision budget is exhausted. One plain completion
-                # turns the latest tool data into the required JSON response.
-                _trace_llm_request(
-                    "conversation_turn 对话回合",
-                    "Tool",
-                    messages_for_model,
-                    tools=[],
-                )
-                response = await self.llm.ainvoke(messages_for_model)
-                _trace_llm_response("conversation_turn 对话回合", "Tool", response)
-
-            raw = _message_content(response)
-            result = _parse_conversation_turn_output(raw)
+            messages_for_final = [
+                *messages_for_model,
+                SystemMessage(content=(
+                    "The tool phase is complete. Use the available conversation and tool "
+                    "results to produce the final response. Do not request tools. Output "
+                    "only the required JSON object."
+                )),
+            ]
+            result = await self._finalize_conversation_turn(messages_for_final)
             reply, citations = validate_conversation_citations(result.reply, executor.evidence)
             return result.model_copy(update={
                 "reply": reply,
@@ -442,6 +431,31 @@ class OpenAICompatibleModel(DiagnosisModel):
                 reply="⚠️ 抱歉，当前 AI 服务暂时不可用，无法生成动态回复。请稍后重试，或联系管理员检查模型服务状态。",
                 suggested_replies=[],
             )
+
+    async def _finalize_conversation_turn(
+        self,
+        messages: list[Any],
+    ) -> ConversationTurnOutput:
+        """Generate and validate the final response after tool decisions finish."""
+        for attempt in range(2):
+            _trace_llm_request(
+                "conversation_turn 最终 JSON",
+                "JSON",
+                messages,
+            )
+            response = await self.json_llm.ainvoke(messages)
+            _trace_llm_response("conversation_turn 最终 JSON", "JSON", response)
+            try:
+                return _parse_conversation_turn_output(_message_content(response))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                if attempt == 0:
+                    logger.warning(
+                        "[conversation_turn] Final JSON response was invalid; retrying once"
+                    )
+                    continue
+                raise
+
+        raise RuntimeError("unreachable")
 
     # ─── Generate Report ────────────────────────────────────────────────
 
@@ -579,60 +593,11 @@ def _parse_conversation_decision(data: Dict[str, Any]) -> ConversationDecision:
 
 
 def _parse_conversation_turn_output(raw: str) -> ConversationTurnOutput:
-    """Parse the LLM response into ConversationTurnOutput.
-
-    Handles:
-    - Clean JSON
-    - JSON wrapped in ```json code blocks
-    - Plain text fallback (treat the whole text as reply, empty everything else)
-    """
-    import re
-
-    text = raw.strip()
-
-    # Try to extract JSON from ```json ... ``` blocks
-    code_block_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
-    if code_block_match:
-        text = code_block_match.group(1).strip()
-
-    # Try to find a JSON object in the text
-    json_match = re.search(r"\{.*\}", text, re.DOTALL)
-    if json_match:
-        try:
-            data = json.loads(json_match.group(0))
-            if isinstance(data, dict) and "reply" in data:
-                decision = _parse_conversation_decision(data)
-                # Parse completeness sub-object
-                comp_raw = data.get("completeness", {})
-                if not isinstance(comp_raw, dict):
-                    comp_raw = {}
-                completeness = CompletenessEval(
-                    score=int(comp_raw.get("score", 0)),
-                    summary=str(comp_raw.get("summary", "")),
-                    missing_aspects=_ensure_str_list(comp_raw.get("missing_aspects", [])),
-                    next_question=str(comp_raw.get("next_question", "")),
-                )
-                return ConversationTurnOutput(
-                    decision=decision.decision,
-                    scene_action=decision.scene_action,
-                    scene=decision.scene,
-                    new_facts=_ensure_str_list(data.get("new_facts", [])),
-                    completeness=completeness,
-                    reply=decision.reply,
-                    suggested_replies=decision.suggested_replies,
-                    reason=decision.reason,
-                )
-        except (json.JSONDecodeError, TypeError, KeyError, ValueError):
-            pass
-
-    # Fallback: treat the entire text as the reply
-    logger.warning("[conversation_turn] Could not parse JSON from response, using raw text as reply")
-    return ConversationTurnOutput(
-        new_facts=[],
-        completeness=CompletenessEval(),
-        reply=raw,
-        suggested_replies=[],
-    )
+    """Parse one strict JSON object into the validated conversation output."""
+    data = json.loads(raw.strip())
+    if not isinstance(data, dict):
+        raise ValueError("conversation turn response must be a JSON object")
+    return ConversationTurnOutput.model_validate(data)
 
 
 _CONVERSATION_CITATION_PATTERN = re.compile(r"\[资料\s*(\d+)\]")

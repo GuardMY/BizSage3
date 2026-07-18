@@ -221,11 +221,27 @@ class FakeToolLLM:
         ))
 
 
+class FakeJsonLLM:
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = iter(responses)
+        self.messages = []
+
+    async def ainvoke(self, messages):
+        self.messages.append(messages)
+        return AIMessage(content=next(self.responses))
+
+
 @pytest.mark.asyncio
 async def test_model_tool_loop_keeps_only_citations_returned_by_tools():
     executor = StubToolExecutor()
     model = OpenAICompatibleModel.__new__(OpenAICompatibleModel)
     model.llm = FakeToolLLM()
+    final_llm = FakeJsonLLM([
+        '{"new_facts": [], "completeness": {"score": 10}, '
+        '"reply": "Policy update.[资料 1] Fake source.[资料 8]", '
+        '"suggested_replies": []}',
+    ])
+    model.json_llm = final_llm
     model._tool_executor_factory = lambda: executor
 
     result = await model.conversation_turn(
@@ -235,9 +251,10 @@ async def test_model_tool_loop_keeps_only_citations_returned_by_tools():
     )
 
     assert executor.calls == [("search_web", {"query": "最新政策"})]
-    assert result.reply == "政策有更新。[资料 1] 以及虚构来源。"
+    assert result.reply == "Policy update.[资料 1] Fake source."
     assert result.citations == executor.evidence
     assert result.tool_evidence == executor.evidence
+    assert any(message.type == "tool" for message in final_llm.messages[0])
 
 
 @pytest.mark.asyncio
@@ -247,6 +264,10 @@ async def test_model_tool_loop_trace_logs_tools_calls_and_tool_messages(caplog, 
     executor = StubToolExecutor()
     model = OpenAICompatibleModel.__new__(OpenAICompatibleModel)
     model.llm = FakeToolLLM()
+    model.json_llm = FakeJsonLLM([
+        '{"new_facts": [], "completeness": {"score": 10}, '
+        '"reply": "Policy update.[资料 1]", "suggested_replies": []}',
+    ])
     model._tool_executor_factory = lambda: executor
 
     await model.conversation_turn(
@@ -259,6 +280,46 @@ async def test_model_tool_loop_trace_logs_tools_calls_and_tool_messages(caplog, 
     assert '"tool_calls"' in caplog.text
     assert '"type": "tool"' in caplog.text
     assert '"query":' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_model_retries_invalid_final_json_once():
+    executor = StubToolExecutor()
+    model = OpenAICompatibleModel.__new__(OpenAICompatibleModel)
+    model.llm = FakeToolLLM()
+    model.json_llm = FakeJsonLLM([
+        "not valid json",
+        '{"new_facts": [], "completeness": {"score": 0}, '
+        '"reply": "Final structured reply", "suggested_replies": []}',
+    ])
+    model._tool_executor_factory = lambda: executor
+
+    result = await model.conversation_turn(
+        [{"role": "user", "content": "Need current policy"}],
+        [],
+        {"industry": "restaurant"},
+    )
+
+    assert result.reply == "Final structured reply"
+    assert len(model.json_llm.messages) == 2
+
+
+@pytest.mark.asyncio
+async def test_model_hides_invalid_json_after_the_retry_fails():
+    executor = StubToolExecutor()
+    model = OpenAICompatibleModel.__new__(OpenAICompatibleModel)
+    model.llm = FakeToolLLM()
+    model.json_llm = FakeJsonLLM(["not valid json", "still not valid json"])
+    model._tool_executor_factory = lambda: executor
+
+    result = await model.conversation_turn(
+        [{"role": "user", "content": "Need current policy"}],
+        [],
+        {"industry": "restaurant"},
+    )
+
+    assert "AI 服务暂时不可用" in result.reply
+    assert "still not valid json" not in result.reply
 
 
 @pytest.mark.asyncio
