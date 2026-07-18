@@ -39,12 +39,9 @@ def _message_for_trace(message: Any) -> dict[str, Any]:
         "content": getattr(message, "content", None),
     }
     for field in (
-        "name",
         "tool_calls",
         "invalid_tool_calls",
         "tool_call_id",
-        "additional_kwargs",
-        "response_metadata",
         "usage_metadata",
     ):
         value = getattr(message, field, None)
