@@ -31,6 +31,16 @@ def _utcnow() -> datetime:
     return datetime.utcnow()
 
 
+class KnowledgeRetrievalConfiguration(Base):
+    """Singleton configuration for the default knowledge retrieval policy."""
+
+    __tablename__ = "knowledge_retrieval_configuration"
+
+    id = Column(Integer, primary_key=True, default=1)
+    strategy = Column(String(32), nullable=False)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+
 class DiagnosisSession(Base):
     __tablename__ = "diagnosis_sessions"
 

@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     minio_secure: bool = False
     minio_bucket: str = "bizsage-knowledge"
     knowledge_upload_max_bytes: int = 20 * 1024 * 1024
+    # Used until an administrator saves a global override in the application
+    # database. Supported values are validated by the knowledge service.
+    knowledge_retrieval_default_strategy: str = "strict"
     industry_catalog_dir: str = str(
         Path(__file__).resolve().parents[2] / "docs" / "industry"
     )

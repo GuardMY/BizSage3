@@ -13,6 +13,7 @@ from app.models import (
     KnowledgeDocument,
     KnowledgeDocumentVersion,
     KnowledgeIngestionJob,
+    KnowledgeRetrievalConfiguration,
     ReportEvidence,
 )
 from app.repository import SessionRepository
@@ -60,6 +61,16 @@ class RecalledVectorIndex:
 
     async def search(self, vector, scene, limit):
         return self.recalled[:limit]
+
+
+class RecordingVectorIndex(RecalledVectorIndex):
+    def __init__(self, recalled: list[tuple[str, float]]):
+        super().__init__(recalled)
+        self.scenes: list[dict[str, str]] = []
+
+    async def search(self, vector, scene, limit):
+        self.scenes.append(dict(scene))
+        return await super().search(vector, scene, limit)
 
 
 def test_evidence_state_is_json_checkpoint_safe():
@@ -221,6 +232,92 @@ async def test_retrieval_exposes_independent_scores_and_final_rank(knowledge_db_
     assert results[0].keyword_score == pytest.approx(1.0)
     assert results[0].source_weight == pytest.approx(0.10)
     assert results[0].combined_score == pytest.approx(1.05)
+
+
+@pytest.mark.asyncio
+async def test_retrieval_strategies_control_scene_filtering_and_fallback(knowledge_db_factory):
+    active_scene = {
+        "industry": "retail",
+        "sub_industry": "department-store",
+        "business_mode": "self-operated",
+        "operating_stage": "new",
+    }
+    async with knowledge_db_factory() as db:
+        document = KnowledgeDocument(title="Retail replenishment", status="published")
+        db.add(document)
+        await db.flush()
+        version = KnowledgeDocumentVersion(
+            document_id=document.id,
+            version_no=1,
+            original_filename="retail.md",
+            content_type="text/markdown",
+            source_type="case_sop",
+            sha256="e" * 64,
+            storage_key="documents/retail.md",
+            status="published",
+            effective_from=datetime.utcnow(),
+            industry_tags=["retail"],
+        )
+        db.add(version)
+        await db.flush()
+        chunk = KnowledgeChunk(
+            version_id=version.id,
+            chunk_no=1,
+            content="inventory replenishment procedure",
+            locator={},
+        )
+        db.add(chunk)
+        await db.commit()
+
+    vectors = RecordingVectorIndex([(chunk.id, 0.8)])
+    service = KnowledgeRetrievalService(
+        vector_index=vectors,
+        embedding_service=FakeEmbedder(),
+        session_factory=knowledge_db_factory,
+    )
+    service._ready = True
+
+    assert await service.retrieve("inventory replenishment", active_scene, strategy_override="strict") == []
+    industry_results = await service.retrieve(
+        "inventory replenishment",
+        active_scene,
+        strategy_override="industry_only",
+    )
+    assert [item.chunk_id for item in industry_results] == [chunk.id]
+
+    vectors.scenes.clear()
+    progressive_results = await service.retrieve(
+        "inventory replenishment",
+        active_scene,
+        strategy_override="progressive",
+    )
+    assert [item.chunk_id for item in progressive_results] == [chunk.id]
+    assert vectors.scenes[-1] == {"industry": "retail"}
+
+    unfiltered_results = await service.retrieve(
+        "inventory replenishment",
+        active_scene,
+        strategy_override="unfiltered",
+    )
+    assert [item.chunk_id for item in unfiltered_results] == [chunk.id]
+    assert vectors.scenes[-1] == {}
+
+    boosted_results = await service.retrieve(
+        "inventory replenishment",
+        active_scene,
+        strategy_override="scene_boost",
+    )
+    assert [item.chunk_id for item in boosted_results] == [chunk.id]
+    assert boosted_results[0].combined_score == pytest.approx(
+        unfiltered_results[0].combined_score + 0.04
+    )
+    assert vectors.scenes[-1] == {}
+
+    async with knowledge_db_factory() as db:
+        db.add(KnowledgeRetrievalConfiguration(id=1, strategy="industry_only"))
+        await db.commit()
+    global_results = await service.retrieve("inventory replenishment", active_scene)
+    assert [item.chunk_id for item in global_results] == [chunk.id]
 
 
 @pytest.mark.asyncio

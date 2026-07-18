@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import PurePosixPath
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 import bleach
 import markdown as markdown_renderer
@@ -30,6 +30,7 @@ from app.models import (
     KnowledgeDocument,
     KnowledgeDocumentVersion,
     KnowledgeIngestionJob,
+    KnowledgeRetrievalConfiguration,
     KnowledgeVectorSyncJob,
     ReportEvidence,
 )
@@ -38,8 +39,24 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".docx", ".md", ".markdown", ".txt"}
 SOURCE_TYPES = {"methodology", "benchmark_rule", "case_sop"}
+RETRIEVAL_STRATEGIES = (
+    "strict",
+    "progressive",
+    "industry_only",
+    "unfiltered",
+    "scene_boost",
+)
+RetrievalStrategy = Literal[
+    "strict",
+    "progressive",
+    "industry_only",
+    "unfiltered",
+    "scene_boost",
+]
 _MAX_CHUNK_CHARS = 1200
 _CHUNK_OVERLAP_CHARS = 180
+_SCENE_FIELDS = ("industry", "sub_industry", "business_mode", "operating_stage")
+_SCENE_MATCH_BOOST = 0.04
 
 
 def utcnow() -> datetime:
@@ -48,6 +65,13 @@ def utcnow() -> datetime:
 
 def normalize_tag(value: str) -> str:
     return " ".join(value.strip().casefold().split())
+
+
+def normalize_retrieval_strategy(value: str | None) -> RetrievalStrategy | None:
+    normalized = (value or "").strip().casefold()
+    if normalized in RETRIEVAL_STRATEGIES:
+        return normalized  # type: ignore[return-value]
+    return None
 
 
 def parse_tags(value: str | Iterable[str] | None) -> list[str]:
@@ -557,6 +581,54 @@ def _metadata_matches(version: KnowledgeDocumentVersion, scene: dict[str, str]) 
     return True
 
 
+def _scene_subset(scene: dict[str, str], fields: tuple[str, ...]) -> dict[str, str]:
+    return {
+        field: str(scene.get(field) or "")
+        for field in fields
+        if scene.get(field)
+    }
+
+
+def _filter_scenes_for_strategy(
+    scene: dict[str, str],
+    strategy: RetrievalStrategy,
+) -> list[dict[str, str]]:
+    full_scene = _scene_subset(scene, _SCENE_FIELDS)
+    if strategy == "strict":
+        return [full_scene]
+    if strategy == "industry_only":
+        return [_scene_subset(scene, ("industry",))]
+    if strategy in {"unfiltered", "scene_boost"}:
+        return [{}]
+
+    candidates = [
+        full_scene,
+        _scene_subset(scene, ("industry", "sub_industry", "business_mode")),
+        _scene_subset(scene, ("industry", "sub_industry")),
+        _scene_subset(scene, ("industry",)),
+        {},
+    ]
+    unique: list[dict[str, str]] = []
+    for candidate in candidates:
+        if candidate not in unique:
+            unique.append(candidate)
+    return unique
+
+
+def _scene_match_count(version: KnowledgeDocumentVersion, scene: dict[str, str]) -> int:
+    matches = 0
+    for key, tags in (
+        ("industry", version.industry_tags),
+        ("sub_industry", version.sub_industry_tags),
+        ("business_mode", version.business_mode_tags),
+        ("operating_stage", version.operating_stage_tags),
+    ):
+        expected = normalize_tag(scene.get(key, ""))
+        if expected and expected in (tags or []):
+            matches += 1
+    return matches
+
+
 class KnowledgeRetrievalService:
     """Retrieval always validates relational version state after Qdrant recall."""
 
@@ -580,6 +652,36 @@ class KnowledgeRetrievalService:
         await self._vector_index.close()
         self._ready = False
 
+    @staticmethod
+    def _environment_default_strategy() -> RetrievalStrategy:
+        return normalize_retrieval_strategy(
+            settings.knowledge_retrieval_default_strategy
+        ) or "strict"
+
+    async def get_global_strategy(self) -> RetrievalStrategy:
+        try:
+            async with self._session_factory() as db:
+                configuration = await db.get(KnowledgeRetrievalConfiguration, 1)
+        except Exception:
+            logger.exception("Knowledge retrieval policy lookup failed; using environment default")
+            return self._environment_default_strategy()
+        return normalize_retrieval_strategy(
+            configuration.strategy if configuration else None
+        ) or self._environment_default_strategy()
+
+    async def set_global_strategy(self, strategy: str) -> RetrievalStrategy:
+        normalized = normalize_retrieval_strategy(strategy)
+        if normalized is None:
+            raise ValueError("invalid_retrieval_strategy")
+        async with self._session_factory() as db:
+            configuration = await db.get(KnowledgeRetrievalConfiguration, 1)
+            if configuration is None:
+                db.add(KnowledgeRetrievalConfiguration(id=1, strategy=normalized))
+            else:
+                configuration.strategy = normalized
+            await db.commit()
+        return normalized
+
     async def retrieve(
         self,
         query: str,
@@ -587,20 +689,58 @@ class KnowledgeRetrievalService:
         *,
         limit: int = 5,
         raise_on_error: bool = False,
+        strategy_override: str | None = None,
     ) -> list[EvidenceContext]:
         if not self._ready or not query.strip():
             return []
+        if strategy_override is not None:
+            strategy = normalize_retrieval_strategy(strategy_override)
+            if strategy is None:
+                raise ValueError("invalid_retrieval_strategy")
+        else:
+            strategy = await self.get_global_strategy()
         try:
             vector = (await self._embedding_service.embed([query]))[0]
-            recalled = await self._vector_index.search(vector, scene, max(limit * 4, 12))
         except Exception:
             logger.exception("Knowledge retrieval failed")
             if raise_on_error:
                 raise
             return []
+
+        for filter_scene in _filter_scenes_for_strategy(scene, strategy):
+            try:
+                recalled = await self._vector_index.search(
+                    vector,
+                    filter_scene,
+                    max(limit * 4, 12),
+                )
+                selected = await self._rank_recalled(
+                    recalled,
+                    query=query,
+                    filter_scene=filter_scene,
+                    ranking_scene=scene if strategy == "scene_boost" else {},
+                    limit=limit,
+                )
+            except Exception:
+                logger.exception("Knowledge retrieval failed")
+                if raise_on_error:
+                    raise
+                return []
+            if selected:
+                return selected
+        return []
+
+    async def _rank_recalled(
+        self,
+        recalled: list[tuple[str, float]],
+        *,
+        query: str,
+        filter_scene: dict[str, str],
+        ranking_scene: dict[str, str],
+        limit: int,
+    ) -> list[EvidenceContext]:
         if not recalled:
             return []
-
         chunk_ids = [chunk_id for chunk_id, _ in recalled]
         now = utcnow()
         async with self._session_factory() as db:
@@ -623,12 +763,13 @@ class KnowledgeRetrievalService:
         source_weight = {"methodology": 0.10, "benchmark_rule": 0.08, "case_sop": 0.05}
         for rank, (chunk_id, semantic_score) in enumerate(recalled, start=1):
             chunk = db_chunks.get(chunk_id)
-            if not chunk or not _metadata_matches(chunk.version, scene):
+            if not chunk or not _metadata_matches(chunk.version, filter_scene):
                 continue
             text_terms = set(re.findall(r"[\w\u4e00-\u9fff]+", chunk.content.casefold()))
             keyword_score = len(query_terms & text_terms) / max(len(query_terms), 1)
             type_weight = source_weight.get(chunk.version.source_type, 0)
-            score = semantic_score + keyword_score * 0.15 + type_weight
+            scene_boost = _scene_match_count(chunk.version, ranking_scene) * _SCENE_MATCH_BOOST
+            score = semantic_score + keyword_score * 0.15 + type_weight + scene_boost
             ranked.append((score, EvidenceContext(
                 chunk_id=chunk.id,
                 version_id=chunk.version.id,
@@ -647,11 +788,10 @@ class KnowledgeRetrievalService:
                 combined_score=score,
             )))
         ranked.sort(key=lambda item: item[0], reverse=True)
-        selected = [
+        return [
             replace(item[1], rank=rank)
             for rank, item in enumerate(ranked[:limit], start=1)
         ]
-        return selected
 
 
 _CITATION_PATTERN = re.compile(r"\[证据\s*(\d+)\]")

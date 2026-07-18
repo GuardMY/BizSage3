@@ -117,6 +117,11 @@ export interface CreatedTemporaryAccessToken extends TemporaryAccessToken {
 // Platform industry knowledge base
 
 export type KnowledgeSourceType = "methodology" | "benchmark_rule" | "case_sop";
+export type KnowledgeRetrievalStrategy = "strict" | "progressive" | "industry_only" | "unfiltered" | "scene_boost";
+
+export interface KnowledgeRetrievalPolicy {
+  strategy: KnowledgeRetrievalStrategy;
+}
 
 export interface KnowledgeIngestionJob {
   id: string;

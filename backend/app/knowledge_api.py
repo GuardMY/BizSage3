@@ -20,6 +20,8 @@ from app.knowledge_schemas import (
     KnowledgeCatalogSyncRunResponse,
     KnowledgeDocumentResponse,
     KnowledgeIngestionJobResponse,
+    KnowledgeRetrievalPolicyResponse,
+    KnowledgeRetrievalPolicyUpdate,
     KnowledgeSearchResultResponse,
     KnowledgeVersionResponse,
     PublishVersionRequest,
@@ -329,6 +331,28 @@ async def search_knowledge(
         source_weight_percent=round(item.source_weight * 100, 1),
         combined_score_percent=_percent(item.combined_score, maximum=1.25),
     ) for item in evidence]
+
+
+@router.get(
+    "/admin/knowledge/retrieval-policy",
+    response_model=KnowledgeRetrievalPolicyResponse,
+    dependencies=[Depends(require_admin)],
+)
+async def get_knowledge_retrieval_policy():
+    return KnowledgeRetrievalPolicyResponse(
+        strategy=await knowledge_retrieval_service.get_global_strategy(),
+    )
+
+
+@router.put(
+    "/admin/knowledge/retrieval-policy",
+    response_model=KnowledgeRetrievalPolicyResponse,
+    dependencies=[Depends(require_admin)],
+)
+async def update_knowledge_retrieval_policy(body: KnowledgeRetrievalPolicyUpdate):
+    return KnowledgeRetrievalPolicyResponse(
+        strategy=await knowledge_retrieval_service.set_global_strategy(body.strategy),
+    )
 
 
 @router.get(

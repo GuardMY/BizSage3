@@ -19,6 +19,8 @@ import type {
   TemporaryAccessToken,
   CreatedTemporaryAccessToken,
   KnowledgeDocument,
+  KnowledgeRetrievalPolicy,
+  KnowledgeRetrievalStrategy,
   KnowledgeSearchResult,
   KnowledgeCatalogSyncRun,
   KnowledgeSourceType,
@@ -153,6 +155,22 @@ export async function searchKnowledge(query: string, limit: number): Promise<Kno
   const params = new URLSearchParams({ query, limit: String(limit) });
   const res = await request(`${apiBase()}/admin/knowledge/search?${params.toString()}`);
   return handleResponse<KnowledgeSearchResult[]>(res);
+}
+
+export async function getKnowledgeRetrievalPolicy(): Promise<KnowledgeRetrievalPolicy> {
+  const res = await request(`${apiBase()}/admin/knowledge/retrieval-policy`);
+  return handleResponse<KnowledgeRetrievalPolicy>(res);
+}
+
+export async function updateKnowledgeRetrievalPolicy(
+  strategy: KnowledgeRetrievalStrategy,
+): Promise<KnowledgeRetrievalPolicy> {
+  const res = await request(`${apiBase()}/admin/knowledge/retrieval-policy`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ strategy }),
+  });
+  return handleResponse<KnowledgeRetrievalPolicy>(res);
 }
 
 export async function createKnowledgeDocument(input: KnowledgeUploadInput): Promise<KnowledgeDocument> {

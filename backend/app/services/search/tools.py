@@ -84,7 +84,14 @@ class ConversationToolExecutor:
     def invocations(self) -> list[ToolInvocationSummary]:
         return list(self._invocations)
 
-    async def execute(self, tool_name: str, raw_args: Any, scene: dict[str, str]) -> str:
+    async def execute(
+        self,
+        tool_name: str,
+        raw_args: Any,
+        scene: dict[str, str],
+        *,
+        retrieval_strategy_override: str | None = None,
+    ) -> str:
         started = time.perf_counter()
         if settings.llm_trace_enabled:
             logger.info(
@@ -108,7 +115,11 @@ class ConversationToolExecutor:
         try:
             async with asyncio.timeout(remaining):
                 if tool_name == "search_knowledge_base":
-                    results, provider, status, reason = await self._search_knowledge(args, scene)
+                    results, provider, status, reason = await self._search_knowledge(
+                        args,
+                        scene,
+                        retrieval_strategy_override,
+                    )
                 elif tool_name == "search_web":
                     results, provider, status, reason = await self._search_web(args)
                 else:
@@ -133,14 +144,16 @@ class ConversationToolExecutor:
         self,
         args: dict[str, Any],
         scene: dict[str, str],
+        retrieval_strategy_override: str | None = None,
     ) -> tuple[list[ConversationCitation], str | None, str, str | None]:
         try:
-            evidence = await self._knowledge_service.retrieve(
-                args["query"],
-                scene,
-                limit=args["limit"],
-                raise_on_error=True,
-            )
+            retrieve_kwargs: dict[str, Any] = {
+                "limit": args["limit"],
+                "raise_on_error": True,
+            }
+            if retrieval_strategy_override is not None:
+                retrieve_kwargs["strategy_override"] = retrieval_strategy_override
+            evidence = await self._knowledge_service.retrieve(args["query"], scene, **retrieve_kwargs)
         except Exception:
             logger.exception("Knowledge-base tool retrieval failed")
             return [], None, "error", "knowledge_retrieval_failed"

@@ -7,10 +7,25 @@ from pydantic import BaseModel, Field
 
 
 KnowledgeSourceType = Literal["methodology", "benchmark_rule", "case_sop"]
+KnowledgeRetrievalStrategy = Literal[
+    "strict",
+    "progressive",
+    "industry_only",
+    "unfiltered",
+    "scene_boost",
+]
 
 
 class PublishVersionRequest(BaseModel):
     effective_from: datetime | None = None
+
+
+class KnowledgeRetrievalPolicyUpdate(BaseModel):
+    strategy: KnowledgeRetrievalStrategy
+
+
+class KnowledgeRetrievalPolicyResponse(BaseModel):
+    strategy: KnowledgeRetrievalStrategy
 
 
 class KnowledgeIngestionJobResponse(BaseModel):

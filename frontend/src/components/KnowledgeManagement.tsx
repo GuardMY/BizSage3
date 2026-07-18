@@ -1,14 +1,22 @@
 "use client";
 
 import { FormEvent, type ReactNode, useCallback, useEffect, useState } from "react";
-import { AlertCircle, BookOpen, CheckCircle2, Database, ExternalLink, FileClock, FileUp, LoaderCircle, Play, RefreshCw, RotateCcw, Search, Send, X } from "lucide-react";
+import { AlertCircle, BookOpen, CheckCircle2, Database, ExternalLink, FileClock, FileUp, LoaderCircle, Play, RefreshCw, RotateCcw, Search, Send, SlidersHorizontal, X } from "lucide-react";
 import * as api from "@/lib/api";
-import type { KnowledgeCatalogSyncItem, KnowledgeCatalogSyncRun, KnowledgeDocument, KnowledgeSearchResult, KnowledgeSourceType, KnowledgeVersion } from "@/types";
+import type { KnowledgeCatalogSyncItem, KnowledgeCatalogSyncRun, KnowledgeDocument, KnowledgeRetrievalStrategy, KnowledgeSearchResult, KnowledgeSourceType, KnowledgeVersion } from "@/types";
 
 const SOURCE_TYPES: Array<{ value: KnowledgeSourceType; label: string }> = [
   { value: "methodology", label: "行业方法论" },
   { value: "benchmark_rule", label: "基准与规则" },
   { value: "case_sop", label: "脱敏案例与 SOP" },
+];
+
+const RETRIEVAL_STRATEGIES: Array<{ value: KnowledgeRetrievalStrategy; label: string }> = [
+  { value: "strict", label: "严格全场景匹配" },
+  { value: "progressive", label: "分级放宽" },
+  { value: "industry_only", label: "仅行业匹配" },
+  { value: "unfiltered", label: "不使用场景过滤" },
+  { value: "scene_boost", label: "场景排序加分" },
 ];
 
 type KnowledgeTab = "upload" | "search" | "versions" | "sync";
@@ -44,6 +52,8 @@ export default function KnowledgeManagement() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
+  const [retrievalStrategy, setRetrievalStrategy] = useState<KnowledgeRetrievalStrategy | null>(null);
+  const [retrievalStrategySaving, setRetrievalStrategySaving] = useState(false);
 
   const loadDocuments = useCallback(async () => {
     setLoading(true);
@@ -69,10 +79,20 @@ export default function KnowledgeManagement() {
     }
   }, []);
 
+  const loadRetrievalStrategy = useCallback(async () => {
+    try {
+      const policy = await api.getKnowledgeRetrievalPolicy();
+      setRetrievalStrategy(policy.strategy);
+    } catch (err) {
+      setError(readableError(err));
+    }
+  }, []);
+
   useEffect(() => {
     void loadDocuments();
     void loadSyncRun();
-  }, [loadDocuments, loadSyncRun]);
+    void loadRetrievalStrategy();
+  }, [loadDocuments, loadRetrievalStrategy, loadSyncRun]);
 
   useEffect(() => {
     if (!syncRun || !isSyncActive(syncRun.state)) return;
@@ -176,6 +196,23 @@ export default function KnowledgeManagement() {
     }
   }
 
+  async function updateRetrievalStrategy(next: KnowledgeRetrievalStrategy) {
+    if (!retrievalStrategy || retrievalStrategySaving || next === retrievalStrategy) return;
+    const previous = retrievalStrategy;
+    setRetrievalStrategy(next);
+    setRetrievalStrategySaving(true);
+    setError(null);
+    try {
+      const policy = await api.updateKnowledgeRetrievalPolicy(next);
+      setRetrievalStrategy(policy.strategy);
+    } catch (err) {
+      setRetrievalStrategy(previous);
+      setError(readableError(err));
+    } finally {
+      setRetrievalStrategySaving(false);
+    }
+  }
+
   async function retryFailedSync() {
     if (!syncRun) return;
     setSyncAction("retry");
@@ -192,9 +229,25 @@ export default function KnowledgeManagement() {
   return (
     <section>
       <header>
-        <div className="flex items-center gap-2">
-          <BookOpen className="h-5 w-5 text-indigo-600" />
-          <h2 className="text-lg font-semibold">行业知识库</h2>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <BookOpen className="h-5 w-5 text-indigo-600" />
+            <h2 className="text-lg font-semibold">行业知识库</h2>
+          </div>
+          <label className="flex items-center gap-2 text-sm font-medium text-gray-700" htmlFor="knowledge-retrieval-strategy">
+            <SlidersHorizontal className="h-4 w-4 text-gray-500" />
+            <span>检索策略</span>
+            <select
+              id="knowledge-retrieval-strategy"
+              value={retrievalStrategy ?? ""}
+              onChange={(event) => void updateRetrievalStrategy(event.target.value as KnowledgeRetrievalStrategy)}
+              disabled={retrievalStrategy === null || retrievalStrategySaving}
+              className="h-9 min-w-44 rounded-md border border-gray-300 bg-white px-2 text-sm font-normal outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-gray-50"
+            >
+              {retrievalStrategy === null && <option value="">加载中</option>}
+              {RETRIEVAL_STRATEGIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+          </label>
         </div>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-500">
           已发布版本才会参与诊断检索。替代或撤回不会改写历史报告；撤回后来源详情和原件立即不可访问。
