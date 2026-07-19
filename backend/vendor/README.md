@@ -6,7 +6,7 @@ build output and installed explicitly by `backend/Dockerfile`.
 SHA-256:
 
 ```text
-2F40751B02BBA15BF1F7D07CCD35EEC59AF6444528E547215F247529468EC809
+437CC3C0B42C5163D228781AD224C5704317038F2A24F854ACD855073E686722
 ```
 
 When updating AgentTrace, replace the wheel, update its filename in the
