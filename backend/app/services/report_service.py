@@ -16,6 +16,7 @@ from app.config import settings
 from app.db import async_session_factory
 from app.domain.schemas import CompletenessEval
 from app.models import DiagnosisSession, ReportGenerationJob
+from app.observability import trace_agent, trace_turn
 from app.repository import SessionRepository
 from app.services.model_service import DiagnosisModel, create_model
 from app.services.knowledge import (
@@ -107,6 +108,27 @@ class ReportJobService:
         if claimed is None:
             return False
         context, attempt_count = claimed
+        return await self._run_claimed(
+            job_id,
+            worker_id=worker_id,
+            context=context,
+            attempt_count=attempt_count,
+        )
+
+    @trace_turn(
+        name="Background report turn",
+        node_key="conversation.background_report_turn",
+        session_id=lambda _self, _job_id, *, context, **_kwargs: context.session_id,
+    )
+    @trace_agent(name="Background report generation", node_key="conversation.background_report")
+    async def _run_claimed(
+        self,
+        job_id: str,
+        *,
+        worker_id: str,
+        context: ReportContext,
+        attempt_count: int,
+    ) -> bool:
         try:
             model = self._model_factory()
             query = "\n".join([

@@ -14,13 +14,16 @@ RUN groupadd --system --gid 1001 bizsage \
     && useradd --system --uid 1001 --gid bizsage bizsage
 
 COPY pyproject.toml ./
+COPY vendor/agenttrace-0.1.0-py3-none-any.whl ./vendor/
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python -c "import subprocess, sys, tomllib; config = tomllib.load(open('pyproject.toml', 'rb')); subprocess.check_call([sys.executable, '-m', 'pip', 'install', *config['project']['dependencies']])"
+    python -c "import subprocess, sys, tomllib; config = tomllib.load(open('pyproject.toml', 'rb')); subprocess.check_call([sys.executable, '-m', 'pip', 'install', './vendor/agenttrace-0.1.0-py3-none-any.whl', *config['project']['dependencies']])"
 
 COPY app ./app
 COPY alembic.ini ./
 COPY alembic ./alembic
+
+RUN install -d -o bizsage -g bizsage /var/lib/agenttrace
 
 USER bizsage
 

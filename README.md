@@ -88,6 +88,7 @@ POSTGRES_PASSWORD=use-a-long-random-postgres-password
 MINIO_ROOT_USER=bizsage-minio
 MINIO_ROOT_PASSWORD=use-a-long-random-minio-password
 APP_PORT=3000
+AGENTTRACE_PORT=4319
 ```
 
 `APP_PORT` 可改为其他宿主机端口，例如 `8080`。
@@ -106,6 +107,9 @@ docker compose ps
 
 打开 `http://localhost:3000/login`，使用 `ADMIN_TOKEN` 登录。若修改了 `APP_PORT`，请替换 URL 中的端口。
 
+AgentTrace 用户对话监控工作台位于 `http://localhost:4319`。若修改了
+`AGENTTRACE_PORT`，请替换对应端口。该工作台按要求不启用鉴权，不应直接暴露到不受信任的网络。
+
 ### 4. 验证服务
 
 ```bash
@@ -113,6 +117,7 @@ docker compose ps
 docker compose logs migrate --tail=100
 docker compose logs backend report-worker knowledge-worker --tail=100
 curl -fsS http://localhost:3000/nginx-health
+curl -fsS http://localhost:4319/api/projects
 ```
 
 默认只有 Nginx 对宿主机暴露端口。后端的 `/health/live` 和 `/health/ready` 适合直接暴露 API 的开发或运维环境使用；`/health/ready` 会检查 PostgreSQL 和 Redis。
@@ -167,6 +172,17 @@ npm run build
 ```bash
 cd backend
 uvicorn app.main:app --reload
+```
+
+本地 AgentTrace 默认关闭。需要本地采集时，先安装仓库内置 wheel，并在
+`backend/.env` 中设置 `AGENTTRACE_ENABLED=true` 和可写的
+`AGENTTRACE_STORAGE_URL`；采集程序与工作台必须使用相同数据库：
+
+```powershell
+cd backend
+python -m pip install .\vendor\agenttrace-0.1.0-py3-none-any.whl
+$env:AGENTTRACE_STORAGE_URL = ".\.agenttrace\agenttrace.db"
+agenttrace ui --storage ".\.agenttrace\agenttrace.db" --no-open
 ```
 
 前端开发服务器默认将 `/api/*` 转发到 `http://localhost:8000`：

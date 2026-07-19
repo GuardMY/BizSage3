@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     # Full LLM prompts, tool schemas/results, and model outputs are sensitive.
     llm_trace_enabled: bool = False
 
+    # AgentTrace is opt-in for local runs and enabled explicitly by Compose.
+    agenttrace_enabled: bool = False
+    agenttrace_project: str = "bizsage3-conversations"
+    agenttrace_storage_url: str = ""
+    agenttrace_capture_input: bool = True
+    agenttrace_capture_output: bool = True
+    agenttrace_flush_timeout_seconds: float = 5.0
+
     # Knowledge base: OpenAI-compatible embeddings, object storage and vectors.
     embedding_api_key: str = ""
     embedding_base_url: str = ""

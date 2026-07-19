@@ -11,6 +11,7 @@ from typing import Any
 
 from app.config import settings
 from app.domain.schemas import ConversationCitation, ToolInvocationSummary
+from app.observability import trace_retriever, trace_tool
 from app.services.knowledge import KnowledgeRetrievalService, knowledge_retrieval_service
 from app.services.search.contracts import SearchResult, WebSearchRequest
 from app.services.search.router import SearchRouter, create_web_search_router
@@ -84,6 +85,7 @@ class ConversationToolExecutor:
     def invocations(self) -> list[ToolInvocationSummary]:
         return list(self._invocations)
 
+    @trace_tool(name="Conversation tool", node_key="tool.conversation.execute")
     async def execute(
         self,
         tool_name: str,
@@ -140,6 +142,7 @@ class ConversationToolExecutor:
         ))
         return _tool_response(status, results, reason)
 
+    @trace_retriever(name="Knowledge-base tool", node_key="retriever.knowledge_tool")
     async def _search_knowledge(
         self,
         args: dict[str, Any],
@@ -172,6 +175,7 @@ class ConversationToolExecutor:
         ]
         return citations, None, "success", None
 
+    @trace_tool(name="Web search tool", node_key="tool.web_search")
     async def _search_web(
         self,
         args: dict[str, Any],

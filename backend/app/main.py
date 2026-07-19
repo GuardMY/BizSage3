@@ -21,6 +21,7 @@ from app.services.coordination import session_lock_manager
 from app.services.industry_catalog import industry_catalog_sync_service
 from app.services.task_queue import task_queue
 from app.services.workflow import workflow_manager
+from app.observability import flush_agenttrace, initialize_agenttrace
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,6 +46,7 @@ async def _request_startup_catalog_sync() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize external clients after one-shot migrations have completed."""
+    initialize_agenttrace()
     await knowledge_storage.startup()
     await knowledge_retrieval_service.startup()
     await session_lock_manager.startup()
@@ -65,6 +67,7 @@ async def lifespan(app: FastAPI):
     await task_queue.shutdown()
     await session_lock_manager.shutdown()
     await engine.dispose()
+    flush_agenttrace()
 
 
 def create_app() -> FastAPI:

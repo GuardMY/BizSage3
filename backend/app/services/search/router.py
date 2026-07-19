@@ -10,6 +10,7 @@ from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.config import settings
+from app.observability import trace_tool
 from app.services.search.contracts import ProviderAttempt, SearchResponse, SearchResult, WebSearchRequest
 from app.services.search.providers import BingWebSearchProvider, TavilyWebSearchProvider, WebSearchProvider
 from app.services.search.providers.base import WebSearchProviderError, WebSearchProviderUnavailable
@@ -72,6 +73,7 @@ class SearchRouter:
         reason = None if merged else "所有网页搜索供应商当前不可用"
         return SearchResponse(results=merged, attempts=attempts, unavailable_reason=reason)
 
+    @trace_tool(name="Web search provider", node_key="tool.web_search_provider")
     async def _attempt(
         self,
         provider: WebSearchProvider,

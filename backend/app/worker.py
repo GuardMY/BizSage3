@@ -27,6 +27,7 @@ from app.services.knowledge import (
 )
 from app.services.industry_catalog import industry_catalog_sync_service
 from app.services.report_service import report_job_service
+from app.observability import flush_agenttrace, initialize_agenttrace
 
 
 def _worker_id(role: str) -> str:
@@ -35,12 +36,14 @@ def _worker_id(role: str) -> str:
 
 async def report_worker_startup(ctx: dict) -> None:
     ctx["worker_id"] = _worker_id("report")
+    initialize_agenttrace()
     await knowledge_retrieval_service.startup()
 
 
 async def report_worker_shutdown(ctx: dict) -> None:
     await knowledge_retrieval_service.shutdown()
     await engine.dispose()
+    flush_agenttrace()
 
 
 async def knowledge_worker_startup(ctx: dict) -> None:

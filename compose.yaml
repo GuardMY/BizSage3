@@ -8,6 +8,13 @@ x-backend-environment: &backend-environment
   MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-bizsage-minio}
   MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-replace-this-minio-password}
   INDUSTRY_CATALOG_DIR: /app/docs/industry
+  AGENTTRACE_ENABLED: "true"
+  AGENTTRACE_PROJECT: bizsage3-conversations
+  AGENTTRACE_STORAGE_URL: sqlite:////var/lib/agenttrace/agenttrace.db
+  AGENTTRACE_CAPTURE_INPUT: "true"
+  AGENTTRACE_CAPTURE_OUTPUT: "true"
+  AGENTTRACE_RETENTION_DAYS: "30"
+  AGENTTRACE_MAX_STORAGE: 2GB
 
 x-backend-build: &backend-build
   context: ./backend
@@ -80,6 +87,8 @@ services:
         condition: service_healthy
     expose:
       - "8000"
+    volumes:
+      - agenttrace-data:/var/lib/agenttrace
     deploy:
       replicas: 1
     init: true
@@ -93,6 +102,8 @@ services:
       <<: *backend-environment
       DB_APPLICATION_NAME: bizsage-report-worker
     command: ["arq", "app.worker.ReportWorkerSettings"]
+    volumes:
+      - agenttrace-data:/var/lib/agenttrace
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -106,6 +117,29 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+    init: true
+    restart: unless-stopped
+
+  agenttrace-ui:
+    build: *backend-build
+    env_file:
+      - ./backend/.env
+    environment:
+      AGENTTRACE_PROJECT: bizsage3-conversations
+      AGENTTRACE_STORAGE_URL: sqlite:////var/lib/agenttrace/agenttrace.db
+      AGENTTRACE_RETENTION_DAYS: "30"
+      AGENTTRACE_MAX_STORAGE: 2GB
+    command: ["uvicorn", "app.agenttrace_ui:app", "--host", "0.0.0.0", "--port", "4319"]
+    volumes:
+      - agenttrace-data:/var/lib/agenttrace
+    expose:
+      - "4319"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4319/api/projects', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     init: true
     restart: unless-stopped
 
@@ -163,6 +197,7 @@ services:
         condition: service_healthy
     ports:
       - "${APP_PORT:-3000}:80"
+      - "${AGENTTRACE_PORT:-4319}:4319"
     restart: unless-stopped
 
   qdrant:
@@ -203,3 +238,4 @@ volumes:
   redis-data:
   minio-data:
   qdrant-data:
+  agenttrace-data:

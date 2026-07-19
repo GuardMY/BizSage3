@@ -26,6 +26,7 @@ from langgraph.types import interrupt, Command
 from app.checkpoints import checkpoint_context
 from app.config import settings
 from app.domain.schemas import ResumeInput, CompletenessEval, ConversationTurnOutput
+from app.observability import trace_agent, trace_guardrail, trace_turn
 from app.services.knowledge import (
     evidence_to_state,
     knowledge_retrieval_service,
@@ -127,6 +128,7 @@ def _make_scene_recognize(model: DiagnosisModel):
     extract the industry from accumulated context.
     """
 
+    @trace_agent(name="Scene recognition", node_key="langgraph.scene_recognize")
     async def node_scene_recognize(state: dict) -> dict:
         """节点1：场景识别 —— 识别用户所在的行业、商业模式、阶段和诊断目标。"""
         logger.info("Node: scene_recognize")
@@ -170,6 +172,7 @@ def _make_scene_recognize(model: DiagnosisModel):
 def _make_greeting_guide(model: DiagnosisModel):
     """Node: Greeting guide — when no industry was identified."""
 
+    @trace_agent(name="Greeting guide", node_key="langgraph.greeting_guide")
     async def node_greeting_guide(state: dict) -> dict:
         """节点2：引导问候 —— 当未识别到行业时，生成自我介绍和引导性问题。"""
         logger.info("Node: greeting_guide")
@@ -205,6 +208,7 @@ def _make_conversation_turn(model: DiagnosisModel):
       4. Generate quick-reply suggestions
     """
 
+    @trace_agent(name="Conversation turn", node_key="langgraph.conversation_turn")
     async def node_conversation_turn(state: dict) -> dict:
         """节点3：对话回合 —— 单次 LLM 调用完成事实提取、完备度评估、回复生成、快捷回答。"""
         logger.info("Node: conversation_turn")
@@ -280,6 +284,11 @@ def _make_await_input():
         logger.info("Node: await_input (interrupt)")
         question = state.get("pending_question", "请提供更多信息")
 
+        # LangGraph implements interrupt() with an internal control-flow
+        # exception. Record a successful node snapshot before suspending so the
+        # expected pause is not shown as an AgentTrace error.
+        _record_await_input(state)
+
         # interrupt() suspends here; returns user reply on resume
         user_reply: str = interrupt({"question": question})
 
@@ -294,6 +303,14 @@ def _make_await_input():
     return node_await_input
 
 
+@trace_agent(name="Await user input", node_key="langgraph.await_input")
+def _record_await_input(state: dict) -> dict:
+    return {
+        "stage": "await_input",
+        "pending_question": state.get("pending_question", "请提供更多信息"),
+    }
+
+
 def _make_generate_report(model: DiagnosisModel):
     """Node: Generate the final diagnosis report.
 
@@ -301,6 +318,7 @@ def _make_generate_report(model: DiagnosisModel):
     the LLM and produces a context-specific markdown report.
     """
 
+    @trace_agent(name="Generate report", node_key="langgraph.generate_report")
     async def node_generate_report(state: dict) -> dict:
         """节点6：生成报告 —— 汇总所有收集的运营事实和完备度信息，生成结构化诊断报告。"""
         logger.info("Node: generate_report")
@@ -342,6 +360,7 @@ def _make_generate_report(model: DiagnosisModel):
 # Routing
 # =============================================================================
 
+@trace_guardrail(name="Route after scene", node_key="langgraph.route_after_scene")
 def route_after_scene(state: dict) -> str:
     """Route the initial decision to a reply or the diagnosis conversation."""
     scene = state.get("user_scene", {})
@@ -354,6 +373,7 @@ def route_after_scene(state: dict) -> str:
     return "greeting_guide"
 
 
+@trace_guardrail(name="Route after await", node_key="langgraph.route_after_await")
 def route_after_await(state: dict) -> str:
     """等待输入后路由：未识别场景→重新识别；强制诊断→生成报告；正常→对话回合。"""
     force = state.get("force_diagnosis", False)
@@ -477,6 +497,12 @@ class WorkflowManager:
             self._checkpointer = None
         logger.info("WorkflowManager shut down")
 
+    @trace_turn(
+        name="User conversation turn",
+        node_key="conversation.user_turn",
+        session_id=lambda _self, session_id, *_args, **_kwargs: session_id,
+    )
+    @trace_agent(name="LangGraph workflow", node_key="langgraph.workflow")
     async def start(self, session_id: str, user_message: str, existing_messages: list = None) -> dict:
         """Start a new diagnosis workflow for a session.
 
@@ -495,6 +521,12 @@ class WorkflowManager:
         result = await self._graph.ainvoke(init_state, config)
         return result
 
+    @trace_turn(
+        name="User conversation turn",
+        node_key="conversation.user_turn",
+        session_id=lambda _self, session_id, *_args, **_kwargs: session_id,
+    )
+    @trace_agent(name="LangGraph workflow", node_key="langgraph.workflow")
     async def resume(self, session_id: str, payload: ResumeInput) -> dict:
         """Resume a paused workflow after user input."""
         if not self._graph:

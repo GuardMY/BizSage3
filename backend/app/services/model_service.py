@@ -26,6 +26,7 @@ from app.domain.schemas import (
     ConversationCitation,
     ConversationTurnOutput,
 )
+from app.observability import trace_llm
 from app.services.search.tools import CONVERSATION_TOOL_SCHEMAS, ConversationToolExecutor
 
 if TYPE_CHECKING:
@@ -81,6 +82,26 @@ def _trace_llm_response(node_name: str, mode: str, response: Any) -> None:
         mode,
         _trace_json(_message_for_trace(response)),
     )
+
+
+@trace_llm(name="OpenAI-compatible LLM", node_key="llm.openai_compatible")
+async def _ainvoke_llm(
+    model: Any,
+    messages: list[Any],
+    *,
+    operation: str,
+    mode: str,
+) -> Any:
+    """Trace every real LangChain model request, including retries and tool loops."""
+    _trace_llm_request(
+        operation,
+        mode,
+        messages,
+        tools=CONVERSATION_TOOL_SCHEMAS if mode == "Tool" else None,
+    )
+    response = await model.ainvoke(messages)
+    _trace_llm_response(operation, mode, response)
+    return response
 
 
 def _decision_contract(active_scene: Dict[str, str], *, initial: bool) -> str:
@@ -231,10 +252,13 @@ class OpenAICompatibleModel(DiagnosisModel):
             messages.extend(convert_to_messages(history))
         messages.append(HumanMessage(content=user))
 
-        _trace_llm_request(node_name, "Chat", messages)
-        res = await self.llm.ainvoke(messages)
+        res = await _ainvoke_llm(
+            self.llm,
+            messages,
+            operation=node_name,
+            mode="Chat",
+        )
         content = res.content
-        _trace_llm_response(node_name, "Chat", res)
         return content
 
     async def _invoke_json(
@@ -255,10 +279,13 @@ class OpenAICompatibleModel(DiagnosisModel):
             messages.extend(convert_to_messages(history))
         messages.append(HumanMessage(content=user))
 
-        _trace_llm_request(node_name, "JSON", messages)
-        res = await self.json_llm.ainvoke(messages)
+        res = await _ainvoke_llm(
+            self.json_llm,
+            messages,
+            operation=node_name,
+            mode="JSON",
+        )
         content = res.content
-        _trace_llm_response(node_name, "JSON", res)
         return content
 
     # ─── Scene Recognition ──────────────────────────────────────────────
@@ -384,14 +411,12 @@ class OpenAICompatibleModel(DiagnosisModel):
             tool_llm = self.llm.bind_tools(CONVERSATION_TOOL_SCHEMAS)
 
             for _ in range(2):
-                _trace_llm_request(
-                    "conversation_turn 对话回合",
-                    "Tool",
+                response = await _ainvoke_llm(
+                    tool_llm,
                     messages_for_model,
-                    tools=CONVERSATION_TOOL_SCHEMAS,
+                    operation="conversation_turn 对话回合",
+                    mode="Tool",
                 )
-                response = await tool_llm.ainvoke(messages_for_model)
-                _trace_llm_response("conversation_turn 对话回合", "Tool", response)
                 tool_calls = list(getattr(response, "tool_calls", None) or [])
                 if not tool_calls:
                     break
@@ -435,13 +460,12 @@ class OpenAICompatibleModel(DiagnosisModel):
     ) -> ConversationTurnOutput:
         """Generate and validate the final response after tool decisions finish."""
         for attempt in range(2):
-            _trace_llm_request(
-                "conversation_turn 最终 JSON",
-                "JSON",
+            response = await _ainvoke_llm(
+                self.json_llm,
                 messages,
+                operation="conversation_turn 最终 JSON",
+                mode="JSON",
             )
-            response = await self.json_llm.ainvoke(messages)
-            _trace_llm_response("conversation_turn 最终 JSON", "JSON", response)
             try:
                 return _parse_conversation_turn_output(_message_content(response))
             except (json.JSONDecodeError, TypeError, ValueError):

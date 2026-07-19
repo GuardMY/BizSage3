@@ -34,6 +34,7 @@ from app.models import (
     KnowledgeVectorSyncJob,
     ReportEvidence,
 )
+from app.observability import trace_retriever
 
 logger = logging.getLogger(__name__)
 
@@ -682,6 +683,7 @@ class KnowledgeRetrievalService:
             await db.commit()
         return normalized
 
+    @trace_retriever(name="Industry knowledge retrieval", node_key="retriever.industry_knowledge")
     async def retrieve(
         self,
         query: str,
