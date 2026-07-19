@@ -25,6 +25,7 @@ import type {
   KnowledgeCatalogSyncRun,
   KnowledgeSourceType,
   KnowledgeVersion,
+  PaginatedResponse,
   ReportEvidence,
 } from "@/types";
 
@@ -87,9 +88,13 @@ export async function getCurrentSession(): Promise<AuthSession> {
   return handleResponse<AuthSession>(res);
 }
 
-export async function listTemporaryTokens(): Promise<TemporaryAccessToken[]> {
-  const res = await request(`${apiBase()}/admin/tokens`);
-  return handleResponse<TemporaryAccessToken[]>(res);
+export async function listTemporaryTokens(
+  page: number,
+  pageSize: number,
+): Promise<PaginatedResponse<TemporaryAccessToken>> {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  const res = await request(`${apiBase()}/admin/tokens?${params.toString()}`);
+  return handleResponse<PaginatedResponse<TemporaryAccessToken>>(res);
 }
 
 export async function createTemporaryToken(
@@ -146,9 +151,13 @@ function knowledgeForm(input: KnowledgeUploadInput, includeTitle: boolean): Form
   return form;
 }
 
-export async function listKnowledgeDocuments(): Promise<KnowledgeDocument[]> {
-  const res = await request(`${apiBase()}/admin/knowledge/documents`);
-  return handleResponse<KnowledgeDocument[]>(res);
+export async function listKnowledgeDocuments(
+  page: number,
+  pageSize: number,
+): Promise<PaginatedResponse<KnowledgeDocument>> {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  const res = await request(`${apiBase()}/admin/knowledge/documents?${params.toString()}`);
+  return handleResponse<PaginatedResponse<KnowledgeDocument>>(res);
 }
 
 export async function searchKnowledge(query: string, limit: number): Promise<KnowledgeSearchResult[]> {

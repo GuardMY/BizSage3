@@ -11,6 +11,7 @@
  * ============================================================================= */
 
 import React from "react";
+import { AlertTriangle } from "lucide-react";
 import type { CompletenessDetail } from "@/types";
 
 interface ProgressPanelProps {
@@ -34,23 +35,23 @@ export default function ProgressPanel({
   const isReady = score >= 80;
 
   return (
-    <aside className="flex h-full w-72 flex-col border-l border-gray-200 bg-white">
+    <aside className="flex h-full w-full flex-col bg-white">
       {/* Header */}
-      <div className="border-b border-gray-100 px-4 py-3">
-        <h3 className="text-sm font-semibold text-gray-800">诊断进度</h3>
+      <div className="flex h-16 items-center border-b border-slate-200 px-5">
+        <div><p className="text-xs font-semibold text-blue-700">ANALYSIS</p><h3 className="mt-0.5 text-sm font-semibold text-slate-900">诊断进度</h3></div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+      <div className="flex-1 space-y-6 overflow-y-auto px-5 py-6">
         {/* ---- Score Gauge ---- */}
         <ScoreGauge score={score} label="信息完备度" />
 
         {/* ---- Stage Indicator ---- */}
         <div>
-          <h4 className="mb-1.5 text-xs font-medium uppercase tracking-wider text-gray-400">
+          <h4 className="mb-1.5 text-xs font-medium text-slate-400">
             当前阶段
           </h4>
-          <div className="flex items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700">
-            <span className="h-2 w-2 rounded-full bg-indigo-400" />
+          <div className="flex items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700">
+            <span className="h-2 w-2 rounded-full bg-blue-500" />
             {stage ? stageLabel : "等待开始"}
           </div>
         </div>
@@ -58,10 +59,10 @@ export default function ProgressPanel({
         {/* ---- Collected Info Summary ---- */}
         {completeness?.summary && (
           <div>
-            <h4 className="mb-1.5 text-xs font-medium uppercase tracking-wider text-gray-400">
+            <h4 className="mb-1.5 text-xs font-medium text-slate-400">
               已有信息
             </h4>
-            <p className="rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-700 leading-relaxed">
+            <p className="rounded-md bg-blue-50 px-3 py-2 text-xs leading-relaxed text-blue-800">
               {completeness.summary}
             </p>
           </div>
@@ -70,14 +71,14 @@ export default function ProgressPanel({
         {/* ---- Missing Aspects ---- */}
         {completeness && completeness.missing_aspects.length > 0 && (
           <div>
-            <h4 className="mb-1.5 text-xs font-medium uppercase tracking-wider text-gray-400">
+            <h4 className="mb-1.5 text-xs font-medium text-slate-400">
               还需了解
             </h4>
             <ul className="space-y-1">
               {completeness.missing_aspects.map((aspect, i) => (
                 <li
                   key={i}
-                  className="flex items-start gap-1.5 text-xs text-gray-600"
+                  className="flex items-start gap-1.5 text-xs text-slate-600"
                 >
                   <span className="mt-0.5 shrink-0 text-amber-400">✗</span>
                   <span>{aspect}</span>
@@ -88,22 +89,10 @@ export default function ProgressPanel({
         )}
 
         {/* ---- Generate Report Button ---- */}
-        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+        <div className="border border-slate-200 bg-slate-50 p-3">
           {!isReady && completeness && (
             <div className="mb-2 flex items-start gap-1.5">
-              <svg
-                className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500"
-                fill="none"
-                viewBox="0 0 24 24"
-                strokeWidth={2}
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
-                />
-              </svg>
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
               <p className="text-xs text-amber-700">
                 信息完备度 {score}%，报告可能不够全面
               </p>
@@ -112,12 +101,12 @@ export default function ProgressPanel({
           <button
             onClick={onGenerateReport}
             disabled={!canGenerateReport}
-            className="w-full rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
+            className="h-10 w-full rounded-md bg-blue-600 px-3 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {reportGenerating ? "报告后台生成中..." : "生成诊断报告"}
           </button>
           {reportGenerating && (
-            <p className="mt-2 text-center text-xs text-gray-500">
+            <p className="mt-2 text-center text-xs text-slate-500">
               可继续对话，完成后会自动更新
             </p>
           )}
@@ -155,7 +144,7 @@ function ScoreGauge({ score, label }: { score: number; label: string }) {
           fill="none"
           stroke="currentColor"
           strokeWidth="6"
-          className="text-gray-100"
+          className="text-slate-100"
         />
         <circle
           cx="40"
@@ -171,8 +160,8 @@ function ScoreGauge({ score, label }: { score: number; label: string }) {
         />
       </svg>
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-2xl font-bold text-gray-800">{score}</span>
-        <span className="text-xs text-gray-400">{label}</span>
+        <span className="text-2xl font-semibold text-slate-800">{score}</span>
+        <span className="text-xs text-slate-400">{label}</span>
       </div>
     </div>
   );

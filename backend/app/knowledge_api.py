@@ -50,6 +50,7 @@ from app.services.knowledge import (
     storage_key_for,
     utcnow,
 )
+from app.response_models import PaginatedResponse
 from app.services.industry_catalog import industry_catalog_sync_service
 from app.services.knowledge_lifecycle import publish_version, revoke_version
 from app.services.task_queue import task_queue
@@ -357,19 +358,31 @@ async def update_knowledge_retrieval_policy(body: KnowledgeRetrievalPolicyUpdate
 
 @router.get(
     "/admin/knowledge/documents",
-    response_model=list[KnowledgeDocumentResponse],
+    response_model=PaginatedResponse[KnowledgeDocumentResponse],
     dependencies=[Depends(require_admin)],
 )
-async def list_knowledge_documents(db: AsyncSession = Depends(get_db_session)):
+async def list_knowledge_documents(
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    db: AsyncSession = Depends(get_db_session),
+):
+    total = await db.scalar(select(func.count()).select_from(KnowledgeDocument))
     result = await db.execute(
         select(KnowledgeDocument)
         .order_by(KnowledgeDocument.updated_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
         .options(
             selectinload(KnowledgeDocument.versions).selectinload(KnowledgeDocumentVersion.chunks),
             selectinload(KnowledgeDocument.versions).selectinload(KnowledgeDocumentVersion.ingestion_jobs),
         )
     )
-    return [_document_response(document) for document in result.scalars().all()]
+    return PaginatedResponse(
+        items=[_document_response(document) for document in result.scalars().all()],
+        page=page,
+        page_size=page_size,
+        total=total or 0,
+    )
 
 
 async def _load_catalog_sync_run(

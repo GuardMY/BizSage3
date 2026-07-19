@@ -29,12 +29,8 @@ export default function QuickReplies({ replies, onSelect, disabled }: QuickRepli
   if (!replies || replies.length === 0) return null;
 
   return (
-    <div className="border-t border-gray-100 bg-gray-50/80 px-4 py-2.5">
+    <div className="border-t border-slate-100 bg-white px-8 py-3">
       <div className="mx-auto max-w-4xl">
-        {/* Label */}
-        <p className="mb-1.5 text-xs font-medium text-gray-400">快捷回复</p>
-
-        {/* Scrollable chip row */}
         <div
           ref={scrollRef}
           className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin"
@@ -47,12 +43,11 @@ export default function QuickReplies({ replies, onSelect, disabled }: QuickRepli
               disabled={disabled}
               onClick={() => onSelect(reply)}
               className="
-                shrink-0 rounded-full border border-gray-300 bg-white
-                px-3.5 py-1.5 text-sm text-gray-700
-                transition-all duration-150
-                hover:border-indigo-400 hover:bg-indigo-50 hover:text-indigo-700
-                active:scale-95 active:bg-indigo-100
-                disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100
+                shrink-0 rounded-md border border-slate-200 bg-slate-50
+                px-3 py-1.5 text-sm text-slate-700
+                transition-colors
+                hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700
+                disabled:cursor-not-allowed disabled:opacity-40
               "
             >
               {reply}

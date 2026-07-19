@@ -12,7 +12,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { Download, ExternalLink } from "lucide-react";
+import { Download, ExternalLink, FileText } from "lucide-react";
 import type { ReportEvidence, ReportResponse } from "@/types";
 import {
   getKnowledgeOriginalUrl,
@@ -82,9 +82,9 @@ export default function ReportView({
       <div className="flex flex-1 items-center justify-center bg-white">
         <div className="flex flex-col items-center gap-3">
           <div className="flex gap-1">
-            <span className="h-2 w-2 animate-bounce rounded-full bg-indigo-400 [animation-delay:0ms]" />
-            <span className="h-2 w-2 animate-bounce rounded-full bg-indigo-400 [animation-delay:150ms]" />
-            <span className="h-2 w-2 animate-bounce rounded-full bg-indigo-400 [animation-delay:300ms]" />
+            <span className="h-2 w-2 animate-bounce rounded-full bg-blue-400 [animation-delay:0ms]" />
+            <span className="h-2 w-2 animate-bounce rounded-full bg-blue-400 [animation-delay:150ms]" />
+            <span className="h-2 w-2 animate-bounce rounded-full bg-blue-400 [animation-delay:300ms]" />
           </div>
           <span className="text-sm text-gray-400">加载诊断报告中...</span>
         </div>
@@ -97,19 +97,7 @@ export default function ReportView({
     return (
       <div className="flex flex-1 items-center justify-center bg-white">
         <div className="max-w-sm text-center">
-          <svg
-            className="mx-auto h-12 w-12 text-gray-300"
-            fill="none"
-            viewBox="0 0 24 24"
-            strokeWidth={1}
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"
-            />
-          </svg>
+          <FileText className="mx-auto h-12 w-12 text-slate-300" />
           <p className="mt-3 text-sm text-gray-500">
             {generating ? "诊断报告正在后台生成" : "暂无诊断报告"}
           </p>
@@ -124,10 +112,10 @@ export default function ReportView({
   return (
     <div className="flex flex-1 flex-col bg-white">
       {/* Toolbar */}
-      <div className="flex items-center justify-between border-b border-gray-200 px-6 py-3">
+      <div className="flex h-16 items-center justify-between border-b border-slate-200 px-7">
         <div className="min-w-0">
-          <h2 className="text-base font-semibold text-gray-800">诊断报告</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
+          <h2 className="text-base font-semibold text-slate-900">诊断报告</h2>
+          <p className="mt-0.5 text-xs text-slate-400">
             {formatReportDate(selectedReport.created_at)}
             {generating && <span className="ml-2 text-amber-600">新报告生成中</span>}
           </p>
@@ -147,15 +135,9 @@ export default function ReportView({
           <a
             href={getReportDownloadUrl(sessionId, selectedReport.id)}
             download
-            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-500"
+            className="inline-flex h-9 items-center gap-1.5 rounded-md bg-blue-600 px-3 text-xs font-medium text-white transition-colors hover:bg-blue-700"
           >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
-              />
-            </svg>
+            <Download className="h-4 w-4" />
             下载报告
           </a>
         </div>

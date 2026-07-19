@@ -28,9 +28,9 @@ export default function MessageBubble({ message, isStreaming }: MessageBubblePro
       {/* Avatar */}
       <div
         className={`
-          flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center
-          text-sm font-bold shadow-sm
-          ${isUser ? "bg-indigo-500 text-white" : "bg-gray-200 text-gray-600"}
+          flex-shrink-0 w-8 h-8 rounded-md flex items-center justify-center
+          text-xs font-semibold shadow-sm
+          ${isUser ? "bg-blue-600 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200"}
         `}
       >
         {isUser ? "我" : "AI"}
@@ -40,11 +40,11 @@ export default function MessageBubble({ message, isStreaming }: MessageBubblePro
       <div className={`flex max-w-[85%] flex-col ${isUser ? "items-end" : "items-start"}`}>
         <div
           className={`
-            rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm
+            rounded-md px-4 py-3 text-sm leading-relaxed shadow-sm
             ${
               isUser
-                ? "bg-indigo-600 text-white rounded-tr-md"
-                : "border border-gray-200 bg-white text-gray-800 rounded-tl-md"
+                ? "bg-blue-600 text-white"
+                : "border border-slate-200 bg-white text-slate-800"
             }
           `}
         >
@@ -74,7 +74,7 @@ export default function MessageBubble({ message, isStreaming }: MessageBubblePro
 
           {/* Streaming cursor */}
           {isStreaming && (
-            <span className="inline-block w-1.5 h-4 bg-gray-500 animate-pulse ml-0.5" />
+            <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-slate-500" />
           )}
         </div>
 
@@ -87,7 +87,7 @@ export default function MessageBubble({ message, isStreaming }: MessageBubblePro
         )}
 
         {/* Timestamp */}
-        <span className={`text-xs text-gray-400 mt-1 ${isUser ? "mr-1" : "ml-1"}`}>
+        <span className={`mt-1 text-xs text-slate-400 ${isUser ? "mr-1" : "ml-1"}`}>
           {time}
         </span>
       </div>
@@ -102,7 +102,7 @@ function CitationCard({ citation }: { citation: ConversationCitation }) {
   const publishedAt = citation.published_at ? formatPublishedAt(citation.published_at) : "";
 
   return (
-    <article className="border border-gray-200 bg-white px-3 py-2.5 text-xs text-gray-600 shadow-sm rounded-md">
+    <article className="rounded-md border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-600 shadow-sm">
       <div className="flex min-w-0 items-start gap-2">
         {isWeb ? (
           <Globe2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-600" aria-hidden="true" />
@@ -110,11 +110,11 @@ function CitationCard({ citation }: { citation: ConversationCitation }) {
           <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" aria-hidden="true" />
         )}
         <div className="min-w-0 flex-1">
-          <p className="break-words font-medium text-gray-800">[资料 {citation.citation_id}] {citation.title}</p>
+          <p className="break-words font-medium text-slate-800">[资料 {citation.citation_id}] {citation.title}</p>
           {citation.quote && (
-            <p className="mt-1 break-words leading-5 text-gray-600">{citation.quote}</p>
+            <p className="mt-1 break-words leading-5 text-slate-600">{citation.quote}</p>
           )}
-          <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-gray-500">
+          <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-slate-500">
             {location && (
               <span className="inline-flex min-w-0 items-center gap-1">
                 <MapPin className="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -127,7 +127,7 @@ function CitationCard({ citation }: { citation: ConversationCitation }) {
                 href={citation.url}
                 target="_blank"
                 rel="noreferrer noopener"
-                className="inline-flex min-w-0 items-center gap-1 text-indigo-700 hover:text-indigo-900 hover:underline"
+                className="inline-flex min-w-0 items-center gap-1 text-blue-700 hover:text-blue-900 hover:underline"
               >
                 <span className="break-all">{domain || citation.url}</span>
                 <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />

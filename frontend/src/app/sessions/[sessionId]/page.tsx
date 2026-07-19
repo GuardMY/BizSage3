@@ -126,17 +126,21 @@ export default function SessionPage() {
         />
       }
     >
-      {/* Error banner */}
-      <ErrorBanner
-        message={diagnosis.error || sessionsHook.error}
-        onDismiss={diagnosis.clearError}
-      />
+      <div className="flex h-full min-h-0 flex-col bg-slate-100">
+        <ErrorBanner
+          message={diagnosis.error || sessionsHook.error}
+          onDismiss={diagnosis.clearError}
+        />
 
       <div className="flex flex-1 min-h-0">
         {/* ---- Main area: Chat + Report ---- */}
         <div className="flex flex-1 flex-col min-w-0">
-          {/* Tab bar */}
-          <div className="flex items-center border-b border-gray-200 bg-white px-6">
+          <div className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-7">
+            <div>
+              <p className="text-xs font-semibold text-blue-700">WORKSPACE</p>
+              <h1 className="mt-0.5 text-base font-semibold text-slate-950">运营诊断</h1>
+            </div>
+            <div className="flex h-full items-center gap-1">
             <TabButton
               active={activeTab === "chat"}
               onClick={() => setActiveTab("chat")}
@@ -163,6 +167,7 @@ export default function SessionPage() {
                 <span className="ml-1.5 inline-flex h-2 w-2 rounded-full invisible" />
               ) : null}
             </TabButton>
+            </div>
           </div>
 
           {/* Tab content */}
@@ -200,7 +205,7 @@ export default function SessionPage() {
         </div>
 
         {/* ---- Right sidebar: ProgressPanel ---- */}
-        <div className="hidden xl:block">
+        <div className="w-[304px] shrink-0 border-l border-slate-200 bg-white">
           <ProgressPanel
             score={progressScore}
             completeness={diagnosis.completeness}
@@ -210,6 +215,7 @@ export default function SessionPage() {
             onGenerateReport={handleGenerateReport}
           />
         </div>
+      </div>
       </div>
     </AppShell>
   );
@@ -236,11 +242,11 @@ function TabButton({
     <button
       onClick={onClick}
       className={`
-        relative flex items-center px-4 py-3 text-sm font-medium transition-colors
+        relative flex h-full items-center px-4 text-sm font-medium transition-colors
         ${
           active
-            ? "text-indigo-600 border-b-2 border-indigo-600"
-            : "text-gray-500 hover:text-gray-700 border-b-2 border-transparent"
+            ? "border-b-2 border-blue-600 text-blue-700"
+            : "border-b-2 border-transparent text-slate-500 hover:text-slate-700"
         }
       `}
     >

@@ -5,8 +5,10 @@ import hmac
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import select, update
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import Principal, create_session_cookie, get_current_principal, require_admin
@@ -20,6 +22,7 @@ from app.auth_schemas import (
 from app.config import settings
 from app.db import get_session as get_db_session
 from app.models import DiagnosisSession, TemporaryAccessToken
+from app.response_models import PaginatedResponse
 
 
 router = APIRouter(prefix="/api/v1")
@@ -146,14 +149,27 @@ async def current_session(
 
 @router.get(
     "/admin/tokens",
-    response_model=list[TemporaryTokenResponse],
+    response_model=PaginatedResponse[TemporaryTokenResponse],
     dependencies=[Depends(require_admin)],
 )
-async def list_temporary_tokens(db: AsyncSession = Depends(get_db_session)):
+async def list_temporary_tokens(
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    db: AsyncSession = Depends(get_db_session),
+):
+    total = await db.scalar(select(func.count()).select_from(TemporaryAccessToken))
     result = await db.execute(
-        select(TemporaryAccessToken).order_by(TemporaryAccessToken.created_at.desc())
+        select(TemporaryAccessToken)
+        .order_by(TemporaryAccessToken.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
-    return [_serialize_token(token) for token in result.scalars().all()]
+    return PaginatedResponse(
+        items=[_serialize_token(token) for token in result.scalars().all()],
+        page=page,
+        page_size=page_size,
+        total=total or 0,
+    )
 
 
 @router.post(

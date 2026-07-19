@@ -16,40 +16,31 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   if (session?.role !== "admin") {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-gray-50 px-5">
-        <div className="w-full max-w-md border-t border-gray-300 pt-8 text-center">
+      <main className="flex min-h-screen min-w-[1180px] items-center justify-center bg-slate-100 px-8">
+        <div className="border-t border-slate-300 pt-8 text-center">
           <ShieldAlert className="mx-auto h-9 w-9 text-amber-500" />
-          <h1 className="mt-4 text-lg font-semibold text-gray-900">无管理员权限</h1>
-          <Link
-            href="/"
-            className="mt-6 inline-flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-700"
-          >
-            返回工作台
-          </Link>
+          <h1 className="mt-4 text-lg font-semibold text-slate-900">无管理员权限</h1>
+          <Link href="/" className="mt-6 inline-flex items-center text-sm font-medium text-blue-700 hover:text-blue-800">返回工作台</Link>
         </div>
       </main>
     );
   }
 
   return (
-    <div className="flex min-h-screen bg-gray-50 text-gray-900">
-      <aside className="flex w-56 shrink-0 flex-col border-r border-gray-200 bg-white">
-        <div className="border-b border-gray-200 px-5 py-5">
-          <Link href="/" className="text-xs font-medium text-gray-500 hover:text-gray-900">BizSage3</Link>
-          <h1 className="mt-1 text-base font-semibold">管理后台</h1>
+    <div className="grid min-h-screen min-w-[1180px] grid-cols-[264px_minmax(0,1fr)] bg-slate-100 text-slate-900">
+      <aside className="flex min-h-screen flex-col bg-slate-950 text-slate-100">
+        <div className="flex h-16 items-center gap-3 border-b border-slate-800 px-5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-blue-600 text-sm font-semibold text-white">B</div>
+          <div>
+            <p className="text-sm font-semibold text-white">BizSage3</p>
+            <p className="mt-0.5 text-xs text-slate-400">管理后台</p>
+          </div>
         </div>
 
-        <div className="px-3 pt-3">
-          <Link
-            href="/"
-            className="flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            返回工作台
-          </Link>
+        <div className="px-4 pt-5">
+          <p className="px-2 text-xs font-medium text-slate-500">管理中心</p>
         </div>
-
-        <nav aria-label="管理后台功能" className="flex-1 space-y-1 p-3">
+        <nav aria-label="管理后台功能" className="space-y-1 px-4 pt-3">
           {tabs.map(({ href, label, icon: Icon }) => {
             const active = pathname === href;
             return (
@@ -57,11 +48,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 key={href}
                 href={href}
                 aria-current={active ? "page" : undefined}
-                className={`flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium transition-colors ${
-                  active
-                    ? "bg-indigo-50 text-indigo-700"
-                    : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                }`}
+                className={`flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium transition-colors ${active ? "bg-blue-500/15 text-blue-200 ring-1 ring-inset ring-blue-400/25" : "text-slate-400 hover:bg-slate-900 hover:text-white"}`}
               >
                 <Icon className="h-4 w-4" />
                 {label}
@@ -70,19 +57,19 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           })}
         </nav>
 
-        <div className="border-t border-gray-200 p-3">
-          <button
-            type="button"
-            onClick={() => void logout()}
-            className="flex h-10 w-full items-center gap-3 rounded-md px-3 text-sm text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-          >
+        <div className="mt-auto border-t border-slate-800 p-3">
+          <Link href="/" className="flex h-10 items-center gap-3 rounded-md px-3 text-sm text-slate-400 transition hover:bg-slate-900 hover:text-white">
+            <ArrowLeft className="h-4 w-4" />
+            返回工作台
+          </Link>
+          <button type="button" onClick={() => void logout()} className="flex h-10 w-full items-center gap-3 rounded-md px-3 text-sm text-slate-400 transition hover:bg-slate-900 hover:text-white">
             <LogOut className="h-4 w-4" />
             退出登录
           </button>
         </div>
       </aside>
 
-      <div className="min-w-0 flex-1">{children}</div>
+      <div className="min-w-0">{children}</div>
     </div>
   );
 }

@@ -114,6 +114,13 @@ export interface CreatedTemporaryAccessToken extends TemporaryAccessToken {
   token: string;
 }
 
+export interface PaginatedResponse<T> {
+  items: T[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
 // Platform industry knowledge base
 
 export type KnowledgeSourceType = "methodology" | "benchmark_rule" | "case_sop";

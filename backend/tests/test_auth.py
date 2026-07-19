@@ -14,7 +14,8 @@ from app.api import router as api_router
 from app.auth_api import router as auth_router
 from app.config import settings
 from app.db import get_session as get_db_session
-from app.models import Base, DiagnosisSession, Report, TemporaryAccessToken
+from app.knowledge_api import router as knowledge_router
+from app.models import Base, DiagnosisSession, KnowledgeDocument, Report, TemporaryAccessToken
 
 
 @pytest.fixture
@@ -34,6 +35,7 @@ async def auth_test_app(monkeypatch):
     app = FastAPI()
     app.dependency_overrides[get_db_session] = override_session
     app.include_router(auth_router)
+    app.include_router(knowledge_router)
     app.include_router(
         api_router,
         dependencies=[Depends(get_current_principal)],
@@ -122,16 +124,53 @@ async def test_token_must_be_revoked_before_deletion(auth_test_app):
 
             listed = await admin.get("/api/v1/admin/tokens")
             assert listed.status_code == 200
-            assert listed.json()[0]["status"] == "revoked"
+            assert listed.json()["items"][0]["status"] == "revoked"
 
             deleted = await admin.delete(
                 f"/api/v1/admin/tokens/{token_data['id']}"
             )
             assert deleted.status_code == 204
-            assert (await admin.get("/api/v1/admin/tokens")).json() == []
+            assert (await admin.get("/api/v1/admin/tokens")).json()["items"] == []
             assert (
                 await admin.delete(f"/api/v1/admin/tokens/{token_data['id']}")
             ).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_management_lists_return_paginated_responses(auth_test_app):
+    app, factory = auth_test_app
+    transport = ASGITransport(app=app)
+
+    async with factory() as db:
+        db.add_all([
+            KnowledgeDocument(title="资料 A", status="draft"),
+            KnowledgeDocument(title="资料 B", status="draft"),
+            KnowledgeDocument(title="资料 C", status="draft"),
+        ])
+        await db.commit()
+
+    async with AsyncClient(transport=transport, base_url="http://test") as admin:
+        await admin.post("/api/v1/auth/login", json={"token": settings.admin_token})
+        for index in range(3):
+            created = await admin.post(
+                "/api/v1/admin/tokens",
+                json={"name": f"分页令牌 {index}", "expires_in_hours": 24},
+            )
+            assert created.status_code == 201
+
+        token_page = await admin.get("/api/v1/admin/tokens?page=2&page_size=2")
+        assert token_page.status_code == 200
+        assert token_page.json()["page"] == 2
+        assert token_page.json()["page_size"] == 2
+        assert token_page.json()["total"] == 3
+        assert len(token_page.json()["items"]) == 1
+
+        document_page = await admin.get("/api/v1/admin/knowledge/documents?page=2&page_size=2")
+        assert document_page.status_code == 200
+        assert document_page.json()["page"] == 2
+        assert document_page.json()["page_size"] == 2
+        assert document_page.json()["total"] == 3
+        assert len(document_page.json()["items"]) == 1
 
 
 @pytest.mark.asyncio

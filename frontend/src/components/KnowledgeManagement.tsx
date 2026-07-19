@@ -2,6 +2,7 @@
 
 import { FormEvent, type ReactNode, useCallback, useEffect, useState } from "react";
 import { AlertCircle, BookOpen, CheckCircle2, Database, ExternalLink, FileClock, FileUp, LoaderCircle, Play, RefreshCw, RotateCcw, Search, Send, SlidersHorizontal, X } from "lucide-react";
+import Pagination from "@/components/Pagination";
 import * as api from "@/lib/api";
 import { formatAppDateTime } from "@/lib/time";
 import type { KnowledgeCatalogSyncItem, KnowledgeCatalogSyncRun, KnowledgeDocument, KnowledgeRetrievalStrategy, KnowledgeSearchResult, KnowledgeSourceType, KnowledgeVersion } from "@/types";
@@ -32,6 +33,9 @@ const KNOWLEDGE_TABS = [
 export default function KnowledgeManagement() {
   const [activeTab, setActiveTab] = useState<KnowledgeTab>("upload");
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [processingVersion, setProcessingVersion] = useState<string | null>(null);
@@ -56,16 +60,19 @@ export default function KnowledgeManagement() {
   const [retrievalStrategy, setRetrievalStrategy] = useState<KnowledgeRetrievalStrategy | null>(null);
   const [retrievalStrategySaving, setRetrievalStrategySaving] = useState(false);
 
-  const loadDocuments = useCallback(async () => {
+  const loadDocuments = useCallback(async (targetPage = page, targetPageSize = pageSize) => {
     setLoading(true);
+    setError(null);
     try {
-      setDocuments(await api.listKnowledgeDocuments());
+      const result = await api.listKnowledgeDocuments(targetPage, targetPageSize);
+      setDocuments(result.items);
+      setTotal(result.total);
     } catch (err) {
       setError(readableError(err));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [page, pageSize]);
 
   const loadSyncRun = useCallback(async () => {
     try {
@@ -142,7 +149,8 @@ export default function KnowledgeManagement() {
       if (replacementFor) await api.createKnowledgeDocumentVersion(replacementFor.id, payload);
       else await api.createKnowledgeDocument(payload);
       resetForm();
-      await loadDocuments();
+      if (page === 1) await loadDocuments(1, pageSize);
+      else setPage(1);
     } catch (err) {
       setError(readableError(err));
     } finally {
@@ -229,33 +237,34 @@ export default function KnowledgeManagement() {
 
   return (
     <section>
-      <header>
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <BookOpen className="h-5 w-5 text-indigo-600" />
-            <h2 className="text-lg font-semibold">行业知识库</h2>
+      <header className="flex items-end justify-between border-b border-slate-200 pb-6">
+        <div className="flex items-start gap-4">
+          <div className="flex h-11 w-11 items-center justify-center rounded-md bg-blue-600 text-white shadow-sm">
+            <BookOpen className="h-5 w-5" />
           </div>
-          <label className="flex items-center gap-2 text-sm font-medium text-gray-700" htmlFor="knowledge-retrieval-strategy">
-            <SlidersHorizontal className="h-4 w-4 text-gray-500" />
+          <div>
+            <p className="text-xs font-semibold text-blue-700">KNOWLEDGE BASE</p>
+            <h2 className="mt-1 text-xl font-semibold text-slate-950">行业知识库</h2>
+            <p className="mt-1 text-sm text-slate-500">管理检索资料、版本状态与内置行业文档同步。</p>
+          </div>
+        </div>
+          <label className="flex items-center gap-2 text-sm font-medium text-slate-700" htmlFor="knowledge-retrieval-strategy">
+            <SlidersHorizontal className="h-4 w-4 text-slate-500" />
             <span>检索策略</span>
             <select
               id="knowledge-retrieval-strategy"
               value={retrievalStrategy ?? ""}
               onChange={(event) => void updateRetrievalStrategy(event.target.value as KnowledgeRetrievalStrategy)}
               disabled={retrievalStrategy === null || retrievalStrategySaving}
-              className="h-9 min-w-44 rounded-md border border-gray-300 bg-white px-2 text-sm font-normal outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-gray-50"
+              className="h-9 min-w-44 rounded-md border border-slate-300 bg-white px-2 text-sm font-normal outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50"
             >
               {retrievalStrategy === null && <option value="">加载中</option>}
               {RETRIEVAL_STRATEGIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
           </label>
-        </div>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-500">
-          已发布版本才会参与诊断检索。替代或撤回不会改写历史报告；撤回后来源详情和原件立即不可访问。
-        </p>
       </header>
 
-      <div className="mt-6 overflow-x-auto border-b border-gray-200">
+      <div className="mt-6 overflow-x-auto border-b border-slate-200">
         <div role="tablist" aria-label="知识库功能" className="flex min-w-max gap-6">
           {KNOWLEDGE_TABS.map(({ id, label, icon: Icon }) => {
             const active = activeTab === id;
@@ -270,8 +279,8 @@ export default function KnowledgeManagement() {
                 onClick={() => setActiveTab(id)}
                 className={`flex h-12 items-center gap-2 border-b-2 px-1 text-sm font-medium transition-colors ${
                   active
-                    ? "border-indigo-600 text-indigo-700"
-                    : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-800"
+                    ? "border-blue-600 text-blue-700"
+                    : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800"
                 }`}
               >
                 <Icon className="h-4 w-4" />
@@ -440,12 +449,12 @@ export default function KnowledgeManagement() {
 
       <div id="knowledge-panel-versions" role="tabpanel" aria-labelledby="knowledge-tab-versions" hidden={activeTab !== "versions"} className="mt-6">
         <div className="mb-4 flex items-center justify-between gap-4">
-          <div><h3 className="text-sm font-semibold">资料版本</h3><p className="mt-1 text-xs text-gray-500">共 {documents.length} 份资料</p></div>
-          <button onClick={() => void loadDocuments()} disabled={loading} title="刷新资料列表" aria-label="刷新资料列表" className="flex h-9 w-9 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /></button>
+          <div><h3 className="text-base font-semibold text-slate-900">资料版本</h3><p className="mt-1 text-sm text-slate-500">共 {total} 份资料</p></div>
+          <button onClick={() => void loadDocuments()} disabled={loading} title="刷新资料列表" aria-label="刷新资料列表" className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:border-slate-300 hover:bg-slate-50 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /></button>
         </div>
-        <div className="overflow-hidden rounded-md border border-gray-200 bg-white">
-          {loading ? <div className="px-4 py-12 text-center text-sm text-gray-500">正在加载...</div> : documents.length === 0 ? <div className="px-4 py-12 text-center text-sm text-gray-500">暂无行业资料</div> : (
-            <ul className="divide-y divide-gray-100">
+        <div className="overflow-hidden border border-slate-200 bg-white shadow-sm">
+          {loading ? <div className="px-4 py-12 text-center text-sm text-slate-500">正在加载...</div> : documents.length === 0 ? <div className="px-4 py-12 text-center text-sm text-slate-500">暂无行业资料</div> : (
+            <ul className="divide-y divide-slate-100">
               {documents.map((document) => <li key={document.id} className="px-4 py-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0"><p className="truncate text-sm font-medium text-gray-900">{document.title}</p><p className="mt-1 text-xs text-gray-400">{document.versions.length} 个版本</p></div>
@@ -457,6 +466,17 @@ export default function KnowledgeManagement() {
               </li>)}
             </ul>
           )}
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            disabled={loading}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => {
+              setPage(1);
+              setPageSize(size);
+            }}
+          />
         </div>
       </div>
     </section>

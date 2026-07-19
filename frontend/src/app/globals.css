@@ -2,18 +2,18 @@
 
 /* ── Base ────────────────────────────────────────────────────────────── */
 :root {
-  --sidebar-width: 280px;
-  --bg-main: #f8f9fb;
-  --bg-sidebar: #1e1e2e;
-  --sidebar-text: #cdd6f4;
-  --sidebar-active: #313244;
-  --accent: #7c3aed;
-  --accent-light: #a78bfa;
-  --border: #e2e4e9;
-  --text-primary: #1e1e2e;
-  --text-secondary: #585b70;
-  --text-muted: #9399b2;
-  --msg-user-bg: #7c3aed;
+  --sidebar-width: 264px;
+  --bg-main: #f1f5f9;
+  --bg-sidebar: #0f172a;
+  --sidebar-text: #cbd5e1;
+  --sidebar-active: #1e293b;
+  --accent: #2563eb;
+  --accent-light: #60a5fa;
+  --border: #dbe3ee;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --msg-user-bg: #2563eb;
   --msg-user-text: #ffffff;
   --msg-assistant-bg: #ffffff;
   --danger: #ef4444;
@@ -27,6 +27,7 @@
 
 html,
 body {
+  min-width: 1180px;
   height: 100%;
   margin: 0;
   padding: 0;
@@ -34,6 +35,18 @@ body {
     "Helvetica Neue", Arial, "Noto Sans SC", sans-serif;
   background: var(--bg-main);
   color: var(--text-primary);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: #dbeafe;
+  color: #172554;
 }
 
 /* ── Layout ──────────────────────────────────────────────────────────── */
@@ -51,7 +64,7 @@ body {
 }
 
 .main-area {
-  margin-left: var(--sidebar-width);
+  margin-left: 0;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
