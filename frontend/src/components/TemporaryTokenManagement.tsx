@@ -12,6 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import * as api from "@/lib/api";
+import { formatAppDateTime } from "@/lib/time";
 import type {
   CreatedTemporaryAccessToken,
   TemporaryAccessToken,
@@ -295,13 +296,13 @@ function StatusBadge({ status }: { status: TemporaryAccessToken["status"] }) {
 }
 
 function formatDate(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
+  return formatAppDateTime(value, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-  }).format(new Date(value));
+  });
 }
 
 function readableError(error: unknown): string {

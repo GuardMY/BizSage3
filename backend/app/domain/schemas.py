@@ -4,6 +4,8 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field
 
+from app.response_models import ShanghaiTimeResponseModel
+
 
 class Scene(BaseModel):
     """Scene recognition output (node_scene_recognize)."""
@@ -38,7 +40,7 @@ class CompletenessEval(BaseModel):
     next_question: str = Field(default="", description="建议追问的问题")
 
 
-class ConversationCitation(BaseModel):
+class ConversationCitation(ShanghaiTimeResponseModel):
     """A verified source that may be displayed beneath an assistant message."""
 
     citation_id: str

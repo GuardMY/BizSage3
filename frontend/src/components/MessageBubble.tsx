@@ -9,6 +9,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ExternalLink, FileText, Globe2, MapPin } from "lucide-react";
 import type { ConversationCitation, Message } from "@/types";
+import { formatAppDateTime } from "@/lib/time";
 
 interface MessageBubbleProps {
   message: Message;
@@ -144,14 +145,11 @@ function CitationCard({ citation }: { citation: ConversationCitation }) {
 // ---------------------------------------------------------------------------
 
 function formatTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const hh = d.getHours().toString().padStart(2, "0");
-    const mm = d.getMinutes().toString().padStart(2, "0");
-    return `${hh}:${mm}`;
-  } catch {
-    return "";
-  }
+  return formatAppDateTime(iso, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 function citationLocation(citation: ConversationCitation): string {
@@ -173,7 +171,9 @@ function displayDomain(url: string): string {
 }
 
 function formatPublishedAt(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString("zh-CN");
+  return formatAppDateTime(value, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
 }

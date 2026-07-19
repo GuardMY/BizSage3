@@ -20,6 +20,7 @@ import {
   getReportDownloadUrl,
   getReportEvidences,
 } from "@/lib/api";
+import { formatAppDateTime } from "@/lib/time";
 
 interface ReportViewProps {
   sessionId: string;
@@ -260,17 +261,17 @@ function EvidencePanel({ evidences, loading }: { evidences: ReportEvidence[]; lo
 }
 
 function formatReportDate(iso: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
+  return formatAppDateTime(iso, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-  }).format(new Date(iso));
+  });
 }
 
 function formatEvidenceDate(iso: string): string {
-  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
+  return formatAppDateTime(iso, { year: "numeric", month: "2-digit", day: "2-digit" });
 }
 
 function formatLocator(locator: Record<string, unknown>): string {

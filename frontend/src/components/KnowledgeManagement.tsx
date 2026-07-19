@@ -3,6 +3,7 @@
 import { FormEvent, type ReactNode, useCallback, useEffect, useState } from "react";
 import { AlertCircle, BookOpen, CheckCircle2, Database, ExternalLink, FileClock, FileUp, LoaderCircle, Play, RefreshCw, RotateCcw, Search, Send, SlidersHorizontal, X } from "lucide-react";
 import * as api from "@/lib/api";
+import { formatAppDateTime } from "@/lib/time";
 import type { KnowledgeCatalogSyncItem, KnowledgeCatalogSyncRun, KnowledgeDocument, KnowledgeRetrievalStrategy, KnowledgeSearchResult, KnowledgeSourceType, KnowledgeVersion } from "@/types";
 
 const SOURCE_TYPES: Array<{ value: KnowledgeSourceType; label: string }> = [
@@ -502,7 +503,7 @@ function triggerLabel(trigger: KnowledgeCatalogSyncRun["trigger"]): string {
 }
 
 function formatTime(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+  return formatAppDateTime(value, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 function SyncRunStatus({ run }: { run: KnowledgeCatalogSyncRun }) {

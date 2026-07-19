@@ -18,6 +18,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
+from app.time_utils import utcnow as _utcnow
+
 
 class Base(DeclarativeBase):
     pass
@@ -25,10 +27,6 @@ class Base(DeclarativeBase):
 
 def _new_id() -> str:
     return uuid.uuid4().hex
-
-
-def _utcnow() -> datetime:
-    return datetime.utcnow()
 
 
 class KnowledgeRetrievalConfiguration(Base):

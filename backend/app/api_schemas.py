@@ -5,13 +5,14 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.domain.schemas import ConversationCitation
+from app.response_models import ShanghaiTimeResponseModel
 
 
 # =============================================================================
 # Session Schemas
 # =============================================================================
 
-class SessionSummary(BaseModel):
+class SessionSummary(ShanghaiTimeResponseModel):
     """Lightweight session info for list views."""
     id: str
     title: str
@@ -32,7 +33,7 @@ class CompletenessSchema(BaseModel):
     missing_aspects: List[str] = Field(default_factory=list)  # what's still missing
 
 
-class MessageSchema(BaseModel):
+class MessageSchema(ShanghaiTimeResponseModel):
     """A single chat message."""
     id: str
     role: str  # user | assistant
@@ -74,7 +75,7 @@ class MessageRequest(BaseModel):
 # Report Schemas
 # =============================================================================
 
-class ReportResponse(BaseModel):
+class ReportResponse(ShanghaiTimeResponseModel):
     """Diagnosis report response."""
     id: str
     session_id: str
@@ -83,7 +84,7 @@ class ReportResponse(BaseModel):
     created_at: datetime
 
 
-class ReportGenerationResponse(BaseModel):
+class ReportGenerationResponse(ShanghaiTimeResponseModel):
     """Accepted background report generation request."""
     session_id: str
     status: str = "generating"

@@ -5,12 +5,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.response_models import ShanghaiTimeResponseModel
+
 
 class LoginRequest(BaseModel):
     token: str = Field(min_length=1, max_length=512)
 
 
-class AuthSession(BaseModel):
+class AuthSession(ShanghaiTimeResponseModel):
     role: Literal["admin", "user"]
     expires_at: datetime
 
@@ -20,7 +22,7 @@ class CreateTemporaryTokenRequest(BaseModel):
     expires_in_hours: int = Field(default=24, ge=1, le=24 * 30)
 
 
-class TemporaryTokenResponse(BaseModel):
+class TemporaryTokenResponse(ShanghaiTimeResponseModel):
     id: str
     name: str
     token_prefix: str

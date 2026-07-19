@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from app.response_models import ShanghaiTimeResponseModel
+
 
 KnowledgeSourceType = Literal["methodology", "benchmark_rule", "case_sop"]
 KnowledgeRetrievalStrategy = Literal[
@@ -24,11 +26,11 @@ class KnowledgeRetrievalPolicyUpdate(BaseModel):
     strategy: KnowledgeRetrievalStrategy
 
 
-class KnowledgeRetrievalPolicyResponse(BaseModel):
+class KnowledgeRetrievalPolicyResponse(ShanghaiTimeResponseModel):
     strategy: KnowledgeRetrievalStrategy
 
 
-class KnowledgeIngestionJobResponse(BaseModel):
+class KnowledgeIngestionJobResponse(ShanghaiTimeResponseModel):
     id: str
     state: str
     parser: str | None = None
@@ -40,7 +42,7 @@ class KnowledgeIngestionJobResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class KnowledgeVersionResponse(BaseModel):
+class KnowledgeVersionResponse(ShanghaiTimeResponseModel):
     id: str
     document_id: str
     version_no: int
@@ -61,7 +63,7 @@ class KnowledgeVersionResponse(BaseModel):
     updated_at: datetime
 
 
-class KnowledgeDocumentResponse(BaseModel):
+class KnowledgeDocumentResponse(ShanghaiTimeResponseModel):
     id: str
     title: str
     managed_source_key: str | None = None
@@ -72,7 +74,7 @@ class KnowledgeDocumentResponse(BaseModel):
     versions: list[KnowledgeVersionResponse] = Field(default_factory=list)
 
 
-class KnowledgeSearchResultResponse(BaseModel):
+class KnowledgeSearchResultResponse(ShanghaiTimeResponseModel):
     chunk_id: str
     document_id: str
     version_id: str
@@ -88,7 +90,7 @@ class KnowledgeSearchResultResponse(BaseModel):
     combined_score_percent: float
 
 
-class KnowledgeCatalogSyncItemResponse(BaseModel):
+class KnowledgeCatalogSyncItemResponse(ShanghaiTimeResponseModel):
     id: str
     source_key: str
     filename: str
@@ -103,7 +105,7 @@ class KnowledgeCatalogSyncItemResponse(BaseModel):
     finished_at: datetime | None = None
 
 
-class KnowledgeCatalogSyncRunResponse(BaseModel):
+class KnowledgeCatalogSyncRunResponse(ShanghaiTimeResponseModel):
     id: str
     trigger: str
     state: str
@@ -123,7 +125,7 @@ class KnowledgeCatalogSyncRunResponse(BaseModel):
     items: list[KnowledgeCatalogSyncItemResponse] = Field(default_factory=list)
 
 
-class ReportEvidenceResponse(BaseModel):
+class ReportEvidenceResponse(ShanghaiTimeResponseModel):
     evidence_no: int
     document_id: str
     version_id: str
