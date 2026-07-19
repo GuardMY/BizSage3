@@ -235,8 +235,12 @@ export async function retryKnowledgeIngestion(versionId: string): Promise<Knowle
   return handleResponse<KnowledgeVersion>(res);
 }
 
-export async function getLatestIndustrySync(): Promise<KnowledgeCatalogSyncRun | null> {
-  const res = await request(`${apiBase()}/admin/knowledge/industry-sync/latest`);
+export async function getLatestIndustrySync(
+  page: number,
+  pageSize: number,
+): Promise<KnowledgeCatalogSyncRun | null> {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  const res = await request(`${apiBase()}/admin/knowledge/industry-sync/latest?${params.toString()}`);
   return handleResponse<KnowledgeCatalogSyncRun | null>(res);
 }
 

@@ -49,6 +49,9 @@ export default function KnowledgeManagement() {
   const [operatingStageTags, setOperatingStageTags] = useState("");
   const [syncRun, setSyncRun] = useState<KnowledgeCatalogSyncRun | null>(null);
   const [syncLoading, setSyncLoading] = useState(true);
+  const [syncItemsLoading, setSyncItemsLoading] = useState(true);
+  const [syncPage, setSyncPage] = useState(1);
+  const [syncPageSize, setSyncPageSize] = useState(10);
   const [syncAction, setSyncAction] = useState<"start" | "retry" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -74,9 +77,10 @@ export default function KnowledgeManagement() {
     }
   }, [page, pageSize]);
 
-  const loadSyncRun = useCallback(async () => {
+  const loadSyncRun = useCallback(async (targetPage = syncPage, targetPageSize = syncPageSize) => {
+    setSyncItemsLoading(true);
     try {
-      const run = await api.getLatestIndustrySync();
+      const run = await api.getLatestIndustrySync(targetPage, targetPageSize);
       setSyncRun(run);
       return run;
     } catch (err) {
@@ -84,8 +88,9 @@ export default function KnowledgeManagement() {
       return null;
     } finally {
       setSyncLoading(false);
+      setSyncItemsLoading(false);
     }
-  }, []);
+  }, [syncPage, syncPageSize]);
 
   const loadRetrievalStrategy = useCallback(async () => {
     try {
@@ -98,9 +103,15 @@ export default function KnowledgeManagement() {
 
   useEffect(() => {
     void loadVersions();
+  }, [loadVersions]);
+
+  useEffect(() => {
     void loadSyncRun();
+  }, [loadSyncRun]);
+
+  useEffect(() => {
     void loadRetrievalStrategy();
-  }, [loadRetrievalStrategy, loadSyncRun, loadVersions]);
+  }, [loadRetrievalStrategy]);
 
   useEffect(() => {
     if (!syncRun || !isSyncActive(syncRun.state)) return;
@@ -175,7 +186,9 @@ export default function KnowledgeManagement() {
     setSyncAction("start");
     setError(null);
     try {
-      setSyncRun(await api.startIndustrySync());
+      await api.startIndustrySync();
+      setSyncPage(1);
+      await loadSyncRun(1, syncPageSize);
     } catch (err) {
       setError(readableError(err));
     } finally {
@@ -224,7 +237,9 @@ export default function KnowledgeManagement() {
     setSyncAction("retry");
     setError(null);
     try {
-      setSyncRun(await api.retryFailedIndustrySync(syncRun.id));
+      await api.retryFailedIndustrySync(syncRun.id);
+      setSyncPage(1);
+      await loadSyncRun(1, syncPageSize);
     } catch (err) {
       setError(readableError(err));
     } finally {
@@ -431,11 +446,22 @@ export default function KnowledgeManagement() {
               <SyncCount label="失败" value={syncRun.failed_count} danger={syncRun.failed_count > 0} />
             </div>
             {syncRun.error && <p className="mt-4 flex items-start gap-2 text-xs text-amber-700"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{syncRun.error}</p>}
-            {syncRun.items.length > 0 && (
-              <div className="mt-5 max-h-80 overflow-y-auto border border-gray-200 bg-white">
+            {syncRun.total_count > 0 && (
+              <div className="mt-5 overflow-hidden border border-gray-200 bg-white">
                 <ul className="divide-y divide-gray-100">
                   {syncRun.items.map((item) => <SyncItemRow key={item.id} item={item} />)}
                 </ul>
+                <Pagination
+                  page={syncPage}
+                  pageSize={syncPageSize}
+                  total={syncRun.total_count}
+                  disabled={syncItemsLoading}
+                  onPageChange={setSyncPage}
+                  onPageSizeChange={(size) => {
+                    setSyncPage(1);
+                    setSyncPageSize(size);
+                  }}
+                />
               </div>
             )}
           </div>

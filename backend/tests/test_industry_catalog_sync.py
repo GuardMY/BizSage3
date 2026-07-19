@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.knowledge_api import _catalog_sync_response
 from app.models import (
     Base,
     KnowledgeCatalogSyncItem,
@@ -179,6 +180,41 @@ async def test_catalog_sync_is_idempotent_and_revokes_deleted_files(
     assert removed.status == "revoked"
     assert removed.current_version_id is None
     assert revoke_item.state == "revoked"
+
+
+@pytest.mark.asyncio
+async def test_catalog_sync_response_paginates_items_and_keeps_full_run_counts(
+    catalog_db_factory,
+):
+    async with catalog_db_factory() as db:
+        run = KnowledgeCatalogSyncRun(id="run-1", trigger="manual", state="running")
+        db.add(run)
+        db.add_all([
+            KnowledgeCatalogSyncItem(
+                id=f"item-{number}",
+                run_id=run.id,
+                source_key=f"{number:02}.md",
+                filename=f"{number:02}.md",
+                action="create",
+                state=state,
+            )
+            for number, state in enumerate(
+                ("queued", "running", "published", "skipped", "failed"),
+                start=1,
+            )
+        ])
+        await db.commit()
+
+        response = await _catalog_sync_response(db, run, page=2, page_size=2)
+
+    assert response.total_count == 5
+    assert response.pending_count == 1
+    assert response.processing_count == 1
+    assert response.published_count == 1
+    assert response.skipped_count == 1
+    assert response.failed_count == 1
+    assert response.progress_percent == 60
+    assert [item.source_key for item in response.items] == ["03.md", "04.md"]
 
 
 @pytest.mark.asyncio

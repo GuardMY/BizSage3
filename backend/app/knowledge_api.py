@@ -30,6 +30,7 @@ from app.knowledge_schemas import (
 )
 from app.models import (
     DiagnosisSession,
+    KnowledgeCatalogSyncItem,
     KnowledgeCatalogSyncRun,
     KnowledgeAuditEvent,
     KnowledgeDocument,
@@ -127,14 +128,34 @@ def _document_response(document: KnowledgeDocument) -> KnowledgeDocumentResponse
     )
 
 
-def _catalog_sync_response(run: KnowledgeCatalogSyncRun) -> KnowledgeCatalogSyncRunResponse:
-    items = list(run.items or [])
+async def _catalog_sync_response(
+    db: AsyncSession,
+    run: KnowledgeCatalogSyncRun,
+    *,
+    page: int = 1,
+    page_size: int = 10,
+) -> KnowledgeCatalogSyncRunResponse:
+    state_counts = {
+        state: count
+        for state, count in (await db.execute(
+            select(KnowledgeCatalogSyncItem.state, func.count())
+            .where(KnowledgeCatalogSyncItem.run_id == run.id)
+            .group_by(KnowledgeCatalogSyncItem.state)
+        )).all()
+    }
     counts = {
-        state: sum(item.state == state for item in items)
+        state: state_counts.get(state, 0)
         for state in ("queued", "running", "published", "skipped", "failed", "revoked")
     }
     completed = sum(counts[state] for state in ("published", "skipped", "failed", "revoked"))
-    total = len(items)
+    total = sum(state_counts.values())
+    items = list((await db.execute(
+        select(KnowledgeCatalogSyncItem)
+        .where(KnowledgeCatalogSyncItem.run_id == run.id)
+        .order_by(KnowledgeCatalogSyncItem.source_key)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )).scalars().all())
     return KnowledgeCatalogSyncRunResponse(
         id=run.id,
         trigger=run.trigger,
@@ -430,7 +451,6 @@ async def _load_catalog_sync_run(
     return (await db.execute(
         select(KnowledgeCatalogSyncRun)
         .where(KnowledgeCatalogSyncRun.id == run_id)
-        .options(selectinload(KnowledgeCatalogSyncRun.items))
     )).scalar_one_or_none()
 
 
@@ -439,14 +459,17 @@ async def _load_catalog_sync_run(
     response_model=KnowledgeCatalogSyncRunResponse | None,
     dependencies=[Depends(require_admin)],
 )
-async def get_latest_industry_sync(db: AsyncSession = Depends(get_db_session)):
+async def get_latest_industry_sync(
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 10,
+    db: AsyncSession = Depends(get_db_session),
+):
     run = (await db.execute(
         select(KnowledgeCatalogSyncRun)
         .order_by(KnowledgeCatalogSyncRun.created_at.desc())
         .limit(1)
-        .options(selectinload(KnowledgeCatalogSyncRun.items))
     )).scalar_one_or_none()
-    return _catalog_sync_response(run) if run is not None else None
+    return await _catalog_sync_response(db, run, page=page, page_size=page_size) if run is not None else None
 
 
 @router.post(
@@ -460,7 +483,7 @@ async def start_industry_sync(db: AsyncSession = Depends(get_db_session)):
     if created:
         await _enqueue_catalog_sync(run.id)
     loaded = await _load_catalog_sync_run(db, run.id)
-    return _catalog_sync_response(loaded or run)
+    return await _catalog_sync_response(db, loaded or run)
 
 
 @router.post(
@@ -482,7 +505,7 @@ async def retry_failed_industry_sync(
     if created:
         await _enqueue_catalog_sync(run.id)
     loaded = await _load_catalog_sync_run(db, run.id)
-    return _catalog_sync_response(loaded or run)
+    return await _catalog_sync_response(db, loaded or run)
 
 
 @router.post(
