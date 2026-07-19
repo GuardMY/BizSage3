@@ -74,6 +74,17 @@ class KnowledgeDocumentResponse(ShanghaiTimeResponseModel):
     versions: list[KnowledgeVersionResponse] = Field(default_factory=list)
 
 
+class KnowledgeDocumentVersionListItemResponse(ShanghaiTimeResponseModel):
+    """A single version row for the paginated management table."""
+
+    document_id: str
+    document_title: str
+    managed_source_key: str | None = None
+    current_version_id: str | None = None
+    is_current: bool
+    version: KnowledgeVersionResponse
+
+
 class KnowledgeSearchResultResponse(ShanghaiTimeResponseModel):
     chunk_id: str
     document_id: str

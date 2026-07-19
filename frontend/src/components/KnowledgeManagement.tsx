@@ -5,7 +5,7 @@ import { AlertCircle, BookOpen, CheckCircle2, Database, ExternalLink, FileClock,
 import Pagination from "@/components/Pagination";
 import * as api from "@/lib/api";
 import { formatAppDateTime } from "@/lib/time";
-import type { KnowledgeCatalogSyncItem, KnowledgeCatalogSyncRun, KnowledgeDocument, KnowledgeRetrievalStrategy, KnowledgeSearchResult, KnowledgeSourceType, KnowledgeVersion } from "@/types";
+import type { KnowledgeCatalogSyncItem, KnowledgeCatalogSyncRun, KnowledgeDocumentVersionListItem, KnowledgeRetrievalStrategy, KnowledgeSearchResult, KnowledgeSourceType, KnowledgeVersion } from "@/types";
 
 const SOURCE_TYPES: Array<{ value: KnowledgeSourceType; label: string }> = [
   { value: "methodology", label: "行业方法论" },
@@ -32,14 +32,14 @@ const KNOWLEDGE_TABS = [
 
 export default function KnowledgeManagement() {
   const [activeTab, setActiveTab] = useState<KnowledgeTab>("upload");
-  const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [versions, setVersions] = useState<KnowledgeDocumentVersionListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(10);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [processingVersion, setProcessingVersion] = useState<string | null>(null);
-  const [replacementFor, setReplacementFor] = useState<KnowledgeDocument | null>(null);
+  const [replacementFor, setReplacementFor] = useState<KnowledgeDocumentVersionListItem | null>(null);
   const [title, setTitle] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [sourceType, setSourceType] = useState<KnowledgeSourceType>("methodology");
@@ -60,12 +60,12 @@ export default function KnowledgeManagement() {
   const [retrievalStrategy, setRetrievalStrategy] = useState<KnowledgeRetrievalStrategy | null>(null);
   const [retrievalStrategySaving, setRetrievalStrategySaving] = useState(false);
 
-  const loadDocuments = useCallback(async (targetPage = page, targetPageSize = pageSize) => {
+  const loadVersions = useCallback(async (targetPage = page, targetPageSize = pageSize) => {
     setLoading(true);
     setError(null);
     try {
-      const result = await api.listKnowledgeDocuments(targetPage, targetPageSize);
-      setDocuments(result.items);
+      const result = await api.listKnowledgeDocumentVersions(targetPage, targetPageSize);
+      setVersions(result.items);
       setTotal(result.total);
     } catch (err) {
       setError(readableError(err));
@@ -97,20 +97,20 @@ export default function KnowledgeManagement() {
   }, []);
 
   useEffect(() => {
-    void loadDocuments();
+    void loadVersions();
     void loadSyncRun();
     void loadRetrievalStrategy();
-  }, [loadDocuments, loadRetrievalStrategy, loadSyncRun]);
+  }, [loadRetrievalStrategy, loadSyncRun, loadVersions]);
 
   useEffect(() => {
     if (!syncRun || !isSyncActive(syncRun.state)) return;
     const timer = window.setInterval(() => {
       void loadSyncRun().then((next) => {
-        if (next && !isSyncActive(next.state)) void loadDocuments();
+        if (next && !isSyncActive(next.state)) void loadVersions();
       });
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [loadDocuments, loadSyncRun, syncRun]);
+  }, [loadSyncRun, loadVersions, syncRun]);
 
   function resetForm() {
     setReplacementFor(null);
@@ -123,17 +123,14 @@ export default function KnowledgeManagement() {
     setOperatingStageTags("");
   }
 
-  function startReplacement(document: KnowledgeDocument) {
-    setReplacementFor(document);
-    setTitle(document.title);
-    const current = document.versions.find((item) => item.id === document.current_version_id) ?? document.versions[0];
-    if (current) {
-      setSourceType(current.source_type);
-      setIndustryTags(current.industry_tags.join(", "));
-      setSubIndustryTags(current.sub_industry_tags.join(", "));
-      setBusinessModeTags(current.business_mode_tags.join(", "));
-      setOperatingStageTags(current.operating_stage_tags.join(", "));
-    }
+  function startReplacement(item: KnowledgeDocumentVersionListItem) {
+    setReplacementFor(item);
+    setTitle(item.document_title);
+    setSourceType(item.version.source_type);
+    setIndustryTags(item.version.industry_tags.join(", "));
+    setSubIndustryTags(item.version.sub_industry_tags.join(", "));
+    setBusinessModeTags(item.version.business_mode_tags.join(", "));
+    setOperatingStageTags(item.version.operating_stage_tags.join(", "));
     setFile(null);
     setError(null);
     setActiveTab("upload");
@@ -146,10 +143,10 @@ export default function KnowledgeManagement() {
     setError(null);
     const payload = { title, sourceType, file, industryTags, subIndustryTags, businessModeTags, operatingStageTags };
     try {
-      if (replacementFor) await api.createKnowledgeDocumentVersion(replacementFor.id, payload);
+      if (replacementFor) await api.createKnowledgeDocumentVersion(replacementFor.document_id, payload);
       else await api.createKnowledgeDocument(payload);
       resetForm();
-      if (page === 1) await loadDocuments(1, pageSize);
+      if (page === 1) await loadVersions(1, pageSize);
       else setPage(1);
     } catch (err) {
       setError(readableError(err));
@@ -166,7 +163,7 @@ export default function KnowledgeManagement() {
       if (action === "publish") await api.publishKnowledgeVersion(version.id);
       if (action === "revoke") await api.revokeKnowledgeVersion(version.id);
       if (action === "retry") await api.retryKnowledgeIngestion(version.id);
-      await loadDocuments();
+      await loadVersions();
     } catch (err) {
       setError(readableError(err));
     } finally {
@@ -296,7 +293,7 @@ export default function KnowledgeManagement() {
       <div id="knowledge-panel-upload" role="tabpanel" aria-labelledby="knowledge-tab-upload" hidden={activeTab !== "upload"} className="mt-6">
         <form onSubmit={submit} className="max-w-2xl space-y-3 rounded-md border border-gray-200 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between gap-3">
-            <h3 className="text-sm font-semibold">{replacementFor ? `上传 ${replacementFor.title} 的新版本` : "上传资料"}</h3>
+            <h3 className="text-sm font-semibold">{replacementFor ? `上传 ${replacementFor.document_title} 的新版本` : "上传资料"}</h3>
             {replacementFor && (
               <button type="button" onClick={resetForm} title="取消新版本上传" aria-label="取消新版本上传" className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100">
                 <X className="h-4 w-4" />
@@ -449,23 +446,34 @@ export default function KnowledgeManagement() {
 
       <div id="knowledge-panel-versions" role="tabpanel" aria-labelledby="knowledge-tab-versions" hidden={activeTab !== "versions"} className="mt-6">
         <div className="mb-4 flex items-center justify-between gap-4">
-          <div><h3 className="text-base font-semibold text-slate-900">资料版本</h3><p className="mt-1 text-sm text-slate-500">共 {total} 份资料</p></div>
-          <button onClick={() => void loadDocuments()} disabled={loading} title="刷新资料列表" aria-label="刷新资料列表" className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:border-slate-300 hover:bg-slate-50 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /></button>
+          <div><h3 className="text-base font-semibold text-slate-900">资料版本</h3><p className="mt-1 text-sm text-slate-500">共 {total} 个版本</p></div>
+          <button onClick={() => void loadVersions()} disabled={loading} title="刷新资料版本" aria-label="刷新资料版本" className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:border-slate-300 hover:bg-slate-50 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /></button>
         </div>
         <div className="overflow-hidden border border-slate-200 bg-white shadow-sm">
-          {loading ? <div className="px-4 py-12 text-center text-sm text-slate-500">正在加载...</div> : documents.length === 0 ? <div className="px-4 py-12 text-center text-sm text-slate-500">暂无行业资料</div> : (
-            <ul className="divide-y divide-slate-100">
-              {documents.map((document) => <li key={document.id} className="px-4 py-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0"><p className="truncate text-sm font-medium text-gray-900">{document.title}</p><p className="mt-1 text-xs text-gray-400">{document.versions.length} 个版本</p></div>
-                  {document.managed_source_key ? <span className="rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">目录托管</span> : <button onClick={() => startReplacement(document)} className="flex h-8 items-center gap-1.5 rounded-md border border-gray-300 px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50"><FileUp className="h-3.5 w-3.5" /> 新版本</button>}
-                </div>
-                <ul className="mt-3 divide-y divide-gray-100 border-t border-gray-100">
-                  {document.versions.map((version) => <VersionRow key={version.id} version={version} managed={Boolean(document.managed_source_key)} processing={processingVersion === version.id} onProcess={process} />)}
-                </ul>
-              </li>)}
-            </ul>
-          )}
+          <div className="overflow-x-auto">
+            <table className="min-w-full border-collapse text-left">
+              <thead className="bg-slate-50">
+                <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500">
+                  <th className="w-[34%] px-5 py-3">资料名称</th>
+                  <th className="w-[22%] px-5 py-3">版本</th>
+                  <th className="w-[16%] px-5 py-3">状态</th>
+                  <th className="w-[18%] px-5 py-3">更新时间</th>
+                  <th className="w-32 px-4 py-3 text-right"><span className="sr-only">操作</span></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {loading ? <tr><td colSpan={5} className="px-5 py-14 text-center text-sm text-slate-500">正在加载...</td></tr> : versions.length === 0 ? <tr><td colSpan={5} className="px-5 py-14 text-center text-sm text-slate-500">暂无行业资料版本</td></tr> : (
+                  versions.map((item) => <tr key={item.version.id} className="transition hover:bg-slate-50/70">
+                    <td className="px-5 py-4"><div className="min-w-0"><p className="truncate text-sm font-medium text-slate-900">{item.document_title}</p><p className="mt-1 truncate text-xs text-slate-400">{item.version.original_filename}</p></div></td>
+                    <td className="px-5 py-4"><div className="flex items-center gap-2"><span className="text-sm font-medium text-slate-800">v{item.version.version_no}</span><span className="text-xs text-slate-500">{sourceTypeLabel(item.version.source_type)}</span>{item.is_current && <span className="rounded bg-blue-50 px-1.5 py-0.5 text-xs font-medium text-blue-700">当前</span>}</div></td>
+                    <td className="px-5 py-4"><VersionStatus status={item.version.status} /></td>
+                    <td className="px-5 py-4 text-sm tabular-nums text-slate-500">{formatTime(item.version.updated_at)}</td>
+                    <td className="px-4 py-4 text-right"><VersionActions item={item} processing={processingVersion === item.version.id} onProcess={process} onReplace={startReplacement} /></td>
+                  </tr>)
+                )}
+              </tbody>
+            </table>
+          </div>
           <Pagination
             page={page}
             pageSize={pageSize}
@@ -567,20 +575,19 @@ function SyncItemRow({ item }: { item: KnowledgeCatalogSyncItem }) {
   </li>;
 }
 
-function VersionRow({ version, managed, processing, onProcess }: { version: KnowledgeVersion; managed: boolean; processing: boolean; onProcess: (version: KnowledgeVersion, action: "publish" | "revoke" | "retry") => Promise<void> }) {
-  const tagSummary = [version.industry_tags, version.business_mode_tags, version.operating_stage_tags].flat().join(" · ");
-  return <li className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-3">
-    <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium text-gray-800">v{version.version_no}</span><VersionStatus status={version.status} /></div><p className="mt-1 truncate text-xs text-gray-500">{version.original_filename} · {sourceTypeLabel(version.source_type)} · {version.chunk_count} 个切片{tagSummary ? ` · ${tagSummary}` : ""}</p>{version.latest_job?.error && <p className="mt-1 text-xs text-red-600">解析失败：{version.latest_job.error}</p>}</div>
-    {!managed && <div className="flex shrink-0 items-center gap-1">
-      {version.status === "pending_review" && <ActionButton title="发布版本" disabled={processing} onClick={() => void onProcess(version, "publish")}><Send className="h-3.5 w-3.5" /></ActionButton>}
-      {version.status === "draft" && version.latest_job?.state === "failed" && <ActionButton title="重新解析" disabled={processing} onClick={() => void onProcess(version, "retry")}><RotateCcw className="h-3.5 w-3.5" /></ActionButton>}
-      {version.status !== "revoked" && <ActionButton title="撤回版本" disabled={processing} danger onClick={() => void onProcess(version, "revoke")}><X className="h-3.5 w-3.5" /></ActionButton>}
-    </div>}
-  </li>;
+function VersionActions({ item, processing, onProcess, onReplace }: { item: KnowledgeDocumentVersionListItem; processing: boolean; onProcess: (version: KnowledgeVersion, action: "publish" | "revoke" | "retry") => Promise<void>; onReplace: (item: KnowledgeDocumentVersionListItem) => void }) {
+  if (item.managed_source_key) return null;
+  const { version } = item;
+  return <div className="inline-flex items-center gap-1">
+    <ActionButton title="上传新版本" disabled={processing} onClick={() => onReplace(item)}><FileUp className="h-3.5 w-3.5" /></ActionButton>
+    {version.status === "pending_review" && <ActionButton title="发布版本" disabled={processing} onClick={() => void onProcess(version, "publish")}><Send className="h-3.5 w-3.5" /></ActionButton>}
+    {version.status === "draft" && version.latest_job?.state === "failed" && <ActionButton title="重新解析" disabled={processing} onClick={() => void onProcess(version, "retry")}><RotateCcw className="h-3.5 w-3.5" /></ActionButton>}
+    {version.status !== "revoked" && <ActionButton title="撤回版本" disabled={processing} danger onClick={() => void onProcess(version, "revoke")}><X className="h-3.5 w-3.5" /></ActionButton>}
+  </div>;
 }
 
 function ActionButton({ title, disabled, danger, onClick, children }: { title: string; disabled: boolean; danger?: boolean; onClick: () => void; children: ReactNode }) {
-  return <button type="button" title={title} aria-label={title} disabled={disabled} onClick={onClick} className={`flex h-8 w-8 items-center justify-center rounded-md disabled:opacity-40 ${danger ? "text-red-600 hover:bg-red-50" : "text-indigo-600 hover:bg-indigo-50"}`}>{children}</button>;
+  return <button type="button" title={title} aria-label={title} disabled={disabled} onClick={onClick} className={`flex h-8 w-8 items-center justify-center rounded-md disabled:opacity-40 ${danger ? "text-red-600 hover:bg-red-50" : "text-blue-600 hover:bg-blue-50"}`}>{children}</button>;
 }
 
 function VersionStatus({ status }: { status: KnowledgeVersion["status"] }) {

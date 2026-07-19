@@ -19,6 +19,7 @@ import type {
   TemporaryAccessToken,
   CreatedTemporaryAccessToken,
   KnowledgeDocument,
+  KnowledgeDocumentVersionListItem,
   KnowledgeRetrievalPolicy,
   KnowledgeRetrievalStrategy,
   KnowledgeSearchResult,
@@ -158,6 +159,15 @@ export async function listKnowledgeDocuments(
   const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
   const res = await request(`${apiBase()}/admin/knowledge/documents?${params.toString()}`);
   return handleResponse<PaginatedResponse<KnowledgeDocument>>(res);
+}
+
+export async function listKnowledgeDocumentVersions(
+  page: number,
+  pageSize: number,
+): Promise<PaginatedResponse<KnowledgeDocumentVersionListItem>> {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  const res = await request(`${apiBase()}/admin/knowledge/versions?${params.toString()}`);
+  return handleResponse<PaginatedResponse<KnowledgeDocumentVersionListItem>>(res);
 }
 
 export async function searchKnowledge(query: string, limit: number): Promise<KnowledgeSearchResult[]> {

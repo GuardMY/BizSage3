@@ -23,6 +23,7 @@ export default function Pagination({
 }: PaginationProps) {
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(page, pageCount);
+  const pageSizeOptions = Array.from(new Set([...PAGE_SIZE_OPTIONS, pageSize])).sort((a, b) => a - b);
   const start = total === 0 ? 0 : (safePage - 1) * pageSize + 1;
   const end = Math.min(safePage * pageSize, total);
 
@@ -43,7 +44,7 @@ export default function Pagination({
             onChange={(event) => onPageSizeChange(Number(event.target.value))}
             className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50"
           >
-            {PAGE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
+            {pageSizeOptions.map((size) => <option key={size} value={size}>{size}</option>)}
           </select>
           条
         </label>

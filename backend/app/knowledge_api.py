@@ -19,6 +19,7 @@ from app.knowledge_schemas import (
     KnowledgeCatalogSyncItemResponse,
     KnowledgeCatalogSyncRunResponse,
     KnowledgeDocumentResponse,
+    KnowledgeDocumentVersionListItemResponse,
     KnowledgeIngestionJobResponse,
     KnowledgeRetrievalPolicyResponse,
     KnowledgeRetrievalPolicyUpdate,
@@ -379,6 +380,43 @@ async def list_knowledge_documents(
     )
     return PaginatedResponse(
         items=[_document_response(document) for document in result.scalars().all()],
+        page=page,
+        page_size=page_size,
+        total=total or 0,
+    )
+
+
+@router.get(
+    "/admin/knowledge/versions",
+    response_model=PaginatedResponse[KnowledgeDocumentVersionListItemResponse],
+    dependencies=[Depends(require_admin)],
+)
+async def list_knowledge_document_versions(
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 10,
+    db: AsyncSession = Depends(get_db_session),
+):
+    total = await db.scalar(select(func.count()).select_from(KnowledgeDocumentVersion))
+    result = await db.execute(
+        select(KnowledgeDocumentVersion, KnowledgeDocument)
+        .join(KnowledgeDocument, KnowledgeDocumentVersion.document_id == KnowledgeDocument.id)
+        .order_by(KnowledgeDocumentVersion.updated_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .options(
+            selectinload(KnowledgeDocumentVersion.chunks),
+            selectinload(KnowledgeDocumentVersion.ingestion_jobs),
+        )
+    )
+    return PaginatedResponse(
+        items=[KnowledgeDocumentVersionListItemResponse(
+            document_id=document.id,
+            document_title=document.title,
+            managed_source_key=document.managed_source_key,
+            current_version_id=document.current_version_id,
+            is_current=document.current_version_id == version.id,
+            version=_version_response(version),
+        ) for version, document in result.all()],
         page=page,
         page_size=page_size,
         total=total or 0,

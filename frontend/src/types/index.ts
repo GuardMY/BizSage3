@@ -172,6 +172,15 @@ export interface KnowledgeDocument {
   versions: KnowledgeVersion[];
 }
 
+export interface KnowledgeDocumentVersionListItem {
+  document_id: string;
+  document_title: string;
+  managed_source_key: string | null;
+  current_version_id: string | null;
+  is_current: boolean;
+  version: KnowledgeVersion;
+}
+
 export interface KnowledgeSearchResult {
   chunk_id: string;
   document_id: string;

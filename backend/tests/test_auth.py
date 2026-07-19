@@ -15,7 +15,7 @@ from app.auth_api import router as auth_router
 from app.config import settings
 from app.db import get_session as get_db_session
 from app.knowledge_api import router as knowledge_router
-from app.models import Base, DiagnosisSession, KnowledgeDocument, Report, TemporaryAccessToken
+from app.models import Base, DiagnosisSession, KnowledgeDocument, KnowledgeDocumentVersion, Report, TemporaryAccessToken
 
 
 @pytest.fixture
@@ -142,10 +142,24 @@ async def test_management_lists_return_paginated_responses(auth_test_app):
     transport = ASGITransport(app=app)
 
     async with factory() as db:
-        db.add_all([
+        documents = [
             KnowledgeDocument(title="资料 A", status="draft"),
             KnowledgeDocument(title="资料 B", status="draft"),
             KnowledgeDocument(title="资料 C", status="draft"),
+        ]
+        db.add_all(documents)
+        await db.flush()
+        db.add_all([
+            KnowledgeDocumentVersion(
+                document_id=document.id,
+                version_no=1,
+                original_filename=f"document-{index}.md",
+                content_type="text/markdown",
+                source_type="methodology",
+                sha256=f"{index:064x}",
+                storage_key=f"test/document-{index}.md",
+            )
+            for index, document in enumerate(documents, start=1)
         ])
         await db.commit()
 
@@ -171,6 +185,14 @@ async def test_management_lists_return_paginated_responses(auth_test_app):
         assert document_page.json()["page_size"] == 2
         assert document_page.json()["total"] == 3
         assert len(document_page.json()["items"]) == 1
+
+        version_page = await admin.get("/api/v1/admin/knowledge/versions?page=2&page_size=2")
+        assert version_page.status_code == 200
+        assert version_page.json()["page"] == 2
+        assert version_page.json()["page_size"] == 2
+        assert version_page.json()["total"] == 3
+        assert len(version_page.json()["items"]) == 1
+        assert version_page.json()["items"][0]["version"]["version_no"] == 1
 
 
 @pytest.mark.asyncio
