@@ -60,6 +60,7 @@ _MIN_CHUNK_CHARS = 320
 _TARGET_CHUNK_CHARS = 600
 _MAX_CHUNK_CHARS = 800
 _CHUNK_OVERLAP_CHARS = 80
+_EMBEDDING_BATCH_SIZE = 10
 _SCENE_FIELDS = ("industry", "sub_industry", "business_mode", "operating_stage")
 _SCENE_MATCH_BOOST = 0.04
 
@@ -284,12 +285,16 @@ class EmbeddingService:
             return []
         if not embedding_api_key():
             raise RuntimeError("未配置 OPENAI_API_KEY 或 EMBEDDING_API_KEY")
-        response = await self._client.embeddings.create(
-            model=settings.embedding_model,
-            input=texts,
-            dimensions=settings.embedding_dimensions,
-        )
-        return [item.embedding for item in response.data]
+        embeddings: list[list[float]] = []
+        for start in range(0, len(texts), _EMBEDDING_BATCH_SIZE):
+            batch = texts[start:start + _EMBEDDING_BATCH_SIZE]
+            response = await self._client.embeddings.create(
+                model=settings.embedding_model,
+                input=batch,
+                dimensions=settings.embedding_dimensions,
+            )
+            embeddings.extend(item.embedding for item in response.data)
+        return embeddings
 
 
 class KnowledgeVectorIndex:

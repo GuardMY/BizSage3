@@ -2,6 +2,7 @@
 
 import io
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 from docx import Document
@@ -20,6 +21,7 @@ from app.models import (
 )
 from app.repository import SessionRepository
 from app.services.knowledge import (
+    EmbeddingService,
     EvidenceContext,
     KnowledgeIngestionService,
     KnowledgeRetrievalService,
@@ -52,6 +54,21 @@ class RecordingEmbedder(FakeEmbedder):
     async def embed(self, texts: list[str]) -> list[list[float]]:
         self.inputs.extend(texts)
         return await super().embed(texts)
+
+
+class RecordingEmbeddingClient:
+    def __init__(self):
+        self.calls: list[list[str]] = []
+        self.embeddings = self
+
+    async def create(self, *, model, input, dimensions):
+        self.calls.append(list(input))
+        return SimpleNamespace(
+            data=[
+                SimpleNamespace(embedding=[float(len(self.calls)), float(index)])
+                for index, _ in enumerate(input)
+            ]
+        )
 
 
 class FakeVectorIndex:
@@ -162,6 +179,20 @@ async def test_ingestion_creates_reviewable_chunks(knowledge_db_factory):
     assert job.worker_id == "test-worker"
     assert chunks and "曝光到下单" in chunks[0].content
     assert vectors.indexed == [(version_id, len(chunks))]
+
+
+@pytest.mark.asyncio
+async def test_embedding_service_batches_requests_to_provider(monkeypatch):
+    monkeypatch.setattr("app.services.knowledge.embedding_api_key", lambda: "test-key")
+    client = RecordingEmbeddingClient()
+    service = EmbeddingService.__new__(EmbeddingService)
+    service._client = client
+
+    texts = [f"chunk-{index}" for index in range(12)]
+    vectors = await service.embed(texts)
+
+    assert [len(call) for call in client.calls] == [10, 2]
+    assert len(vectors) == 12
 
 
 def test_markdown_frontmatter_and_table_locators_are_precise():
