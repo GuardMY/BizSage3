@@ -1,8 +1,10 @@
 """Lifecycle tests for versioned knowledge ingestion and report citations."""
 
+import io
 from datetime import datetime
 
 import pytest
+from docx import Document
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -21,8 +23,10 @@ from app.services.knowledge import (
     EvidenceContext,
     KnowledgeIngestionService,
     KnowledgeRetrievalService,
+    chunk_blocks,
     evidence_from_state,
     evidence_to_state,
+    parse_document,
     persist_report_evidences,
     validate_report_citations,
 )
@@ -39,6 +43,15 @@ class FakeStorage:
 class FakeEmbedder:
     async def embed(self, texts: list[str]) -> list[list[float]]:
         return [[0.1, 0.2, 0.3] for _ in texts]
+
+
+class RecordingEmbedder(FakeEmbedder):
+    def __init__(self):
+        self.inputs: list[str] = []
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        self.inputs.extend(texts)
+        return await super().embed(texts)
 
 
 class FakeVectorIndex:
@@ -151,6 +164,134 @@ async def test_ingestion_creates_reviewable_chunks(knowledge_db_factory):
     assert vectors.indexed == [(version_id, len(chunks))]
 
 
+def test_markdown_frontmatter_and_table_locators_are_precise():
+    parsed = parse_document(
+        "playbook.md",
+        (
+            b"---\n"
+            b"title: Sample\n"
+            b"---\n"
+            b"# Overview\n\n"
+            b"Intro line.\n\n"
+            b"## Metrics\n\n"
+            b"| KPI | Value |\n"
+            b"| --- | --- |\n"
+            b"| Conversion | 25% |\n"
+            b"| AOV | 88 |\n"
+        ),
+    )
+
+    chunks = chunk_blocks(parsed.blocks)
+
+    assert all("title: Sample" not in text for text, _ in chunks)
+    assert [locator["kind"] for _, locator in chunks] == ["paragraph", "table"]
+    assert chunks[0][1]["heading_path"] == ["Overview"]
+    assert chunks[0][1]["line_start"] == 6
+    assert chunks[0][1]["line_end"] == 6
+    table_locator = chunks[1][1]
+    assert table_locator["heading_path"] == ["Overview", "Metrics"]
+    assert table_locator["line_start"] == 10
+    assert table_locator["line_end"] == 13
+    assert table_locator["table_no"] == 1
+    assert table_locator["row_start"] == 1
+    assert table_locator["row_end"] == 2
+
+
+def test_chunk_blocks_do_not_cross_heading_boundaries():
+    parsed = parse_document(
+        "sections.md",
+        (
+            b"# Guide\n\n"
+            b"## Diagnose\n\n"
+            b"Alpha section.\n\n"
+            b"## Improve\n\n"
+            b"Beta section.\n"
+        ),
+    )
+
+    chunks = chunk_blocks(parsed.blocks)
+
+    assert len(chunks) == 2
+    assert chunks[0][1]["heading_path"] == ["Guide", "Diagnose"]
+    assert chunks[1][1]["heading_path"] == ["Guide", "Improve"]
+    assert "Beta section." not in chunks[0][0]
+    assert "Alpha section." not in chunks[1][0]
+
+
+def test_docx_parser_keeps_heading_paths_and_table_rows():
+    document = Document()
+    document.add_heading("Playbook", level=1)
+    document.add_paragraph("Lead with diagnosis")
+    document.add_heading("Checklist", level=2)
+    table = document.add_table(rows=3, cols=2)
+    table.rows[0].cells[0].text = "Metric"
+    table.rows[0].cells[1].text = "Value"
+    table.rows[1].cells[0].text = "Conversion"
+    table.rows[1].cells[1].text = "25%"
+    table.rows[2].cells[0].text = "AOV"
+    table.rows[2].cells[1].text = "88"
+    buffer = io.BytesIO()
+    document.save(buffer)
+
+    parsed = parse_document("playbook.docx", buffer.getvalue())
+
+    assert [block.locator["kind"] for block in parsed.blocks] == ["paragraph", "table"]
+    paragraph = parsed.blocks[0]
+    assert paragraph.locator["heading_path"] == ["Playbook"]
+    assert paragraph.locator["paragraph_start"] == 2
+    assert paragraph.locator["paragraph_end"] == 2
+    table_block = parsed.blocks[1]
+    assert table_block.locator["heading_path"] == ["Playbook", "Checklist"]
+    assert table_block.locator["table_no"] == 1
+    assert table_block.locator["row_start"] == 1
+    assert table_block.locator["row_end"] == 2
+
+    chunks = chunk_blocks(parsed.blocks)
+
+    assert len(chunks) == 2
+    assert chunks[1][1]["table_no"] == 1
+    assert chunks[1][1]["row_start"] == 1
+    assert chunks[1][1]["row_end"] == 2
+
+
+@pytest.mark.asyncio
+async def test_ingestion_embeddings_include_document_title_and_headings(knowledge_db_factory):
+    async with knowledge_db_factory() as db:
+        document = KnowledgeDocument(title="Delivery Playbook", status="draft")
+        db.add(document)
+        await db.flush()
+        version = KnowledgeDocumentVersion(
+            document_id=document.id,
+            version_no=1,
+            original_filename="delivery.md",
+            content_type="text/markdown",
+            source_type="methodology",
+            sha256="f" * 64,
+            storage_key="documents/version/delivery.md",
+            status="draft",
+        )
+        db.add(version)
+        await db.flush()
+        db.add(KnowledgeIngestionJob(version_id=version.id, state="queued"))
+        await db.commit()
+        version_id = version.id
+
+    embedder = RecordingEmbedder()
+    service = KnowledgeIngestionService(
+        storage=FakeStorage(b"# Diagnosis\n\nCheck funnel health.\n"),
+        vector_index=FakeVectorIndex(),
+        embedding_service=embedder,
+        session_factory=knowledge_db_factory,
+    )
+    async with knowledge_db_factory() as db:
+        job_id = (await db.execute(
+            select(KnowledgeIngestionJob.id).where(KnowledgeIngestionJob.version_id == version_id)
+        )).scalar_one()
+    await service.run(job_id, worker_id="test-worker")
+
+    assert embedder.inputs == ["Delivery Playbook\nDiagnosis\nCheck funnel health."]
+
+
 @pytest.mark.asyncio
 async def test_retrieval_does_not_write_audit_event(knowledge_db_factory):
     service = KnowledgeRetrievalService(
@@ -232,6 +373,69 @@ async def test_retrieval_exposes_independent_scores_and_final_rank(knowledge_db_
     assert results[0].keyword_score == pytest.approx(1.0)
     assert results[0].source_weight == pytest.approx(0.10)
     assert results[0].combined_score == pytest.approx(1.05)
+
+
+@pytest.mark.asyncio
+async def test_retrieval_boosts_heading_matches_for_chinese_queries(knowledge_db_factory):
+    async with knowledge_db_factory() as db:
+        first = KnowledgeDocument(title="Heading match", status="published")
+        second = KnowledgeDocument(title="Content match", status="published")
+        db.add_all([first, second])
+        await db.flush()
+        first_version = KnowledgeDocumentVersion(
+            document_id=first.id,
+            version_no=1,
+            original_filename="heading.md",
+            content_type="text/markdown",
+            source_type="methodology",
+            sha256="g" * 64,
+            storage_key="documents/heading.md",
+            status="published",
+            effective_from=datetime.utcnow(),
+        )
+        second_version = KnowledgeDocumentVersion(
+            document_id=second.id,
+            version_no=1,
+            original_filename="content.md",
+            content_type="text/markdown",
+            source_type="methodology",
+            sha256="h" * 64,
+            storage_key="documents/content.md",
+            status="published",
+            effective_from=datetime.utcnow(),
+        )
+        db.add_all([first_version, second_version])
+        await db.flush()
+        heading_match = KnowledgeChunk(
+            version_id=first_version.id,
+            chunk_no=1,
+            content="general operations notes",
+            locator={"heading_path": ["\u8f6c\u5316\u8bca\u65ad"]},
+        )
+        content_match = KnowledgeChunk(
+            version_id=second_version.id,
+            chunk_no=1,
+            content="\u8f6c\u5316",
+            locator={"heading_path": ["baseline"]},
+        )
+        db.add_all([heading_match, content_match])
+        await db.commit()
+
+    service = KnowledgeRetrievalService(
+        vector_index=RecalledVectorIndex([
+            (content_match.id, 0.8),
+            (heading_match.id, 0.8),
+        ]),
+        embedding_service=FakeEmbedder(),
+        session_factory=knowledge_db_factory,
+    )
+    service._ready = True
+
+    results = await service.retrieve("\u8f6c\u5316\u8bca\u65ad", {}, limit=2)
+
+    assert [item.chunk_id for item in results] == [heading_match.id, content_match.id]
+    assert results[0].keyword_score == pytest.approx(0.35)
+    assert results[1].keyword_score == pytest.approx(0.25)
 
 
 @pytest.mark.asyncio

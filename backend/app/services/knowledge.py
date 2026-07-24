@@ -14,7 +14,10 @@ from typing import Any, Iterable, Literal
 
 import bleach
 import markdown as markdown_renderer
+import yaml
 from docx import Document
+from docx.table import Table
+from docx.text.paragraph import Paragraph
 from minio import Minio
 from openai import AsyncOpenAI
 from qdrant_client import AsyncQdrantClient, models as qmodels
@@ -53,8 +56,10 @@ RetrievalStrategy = Literal[
     "unfiltered",
     "scene_boost",
 ]
-_MAX_CHUNK_CHARS = 1200
-_CHUNK_OVERLAP_CHARS = 180
+_MIN_CHUNK_CHARS = 320
+_TARGET_CHUNK_CHARS = 600
+_MAX_CHUNK_CHARS = 800
+_CHUNK_OVERLAP_CHARS = 80
 _SCENE_FIELDS = ("industry", "sub_industry", "business_mode", "operating_stage")
 _SCENE_MATCH_BOOST = 0.04
 
@@ -65,6 +70,18 @@ def utcnow() -> datetime:
 
 def normalize_tag(value: str) -> str:
     return " ".join(value.strip().casefold().split())
+
+
+def retrieval_terms(value: str) -> set[str]:
+    """Tokenize mixed-language text, adding Chinese bigrams for precise matching."""
+    terms: set[str] = set()
+    for raw in re.findall(r"[\w\u4e00-\u9fff]+", value.casefold()):
+        if len(raw) <= 1:
+            continue
+        terms.add(raw)
+        if re.search(r"[\u4e00-\u9fff]", raw):
+            terms.update(raw[index:index + 2] for index in range(len(raw) - 1))
+    return terms
 
 
 def normalize_retrieval_strategy(value: str | None) -> RetrievalStrategy | None:
@@ -335,6 +352,11 @@ class KnowledgeVectorIndex:
                         "business_mode_tags": version.business_mode_tags or [],
                         "operating_stage_tags": version.operating_stage_tags or [],
                         "source_type": version.source_type,
+                        "chunk_kind": str((chunk.locator or {}).get("kind", "paragraph")),
+                        "heading_path": [
+                            str(item)
+                            for item in (chunk.locator or {}).get("heading_path", [])
+                        ],
                     },
                 )
             )
@@ -431,51 +453,121 @@ def _decode_text(content: bytes) -> str:
     raise ValueError("文本文件必须使用 UTF-8 或 GB18030 编码")
 
 
+_MARKDOWN_TABLE_SEPARATOR = re.compile(
+    r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$"
+)
+_MARKDOWN_LIST_ITEM = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)")
+_SENTENCE_BOUNDARIES = ("\n", "。", "！", "？", "；", ".", "!", "?", ";")
+
+
+def _strip_markdown_frontmatter(raw: str) -> str:
+    """Blank a leading YAML frontmatter block while preserving source line numbers."""
+    lines = raw.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return raw
+    try:
+        end = next(
+            index for index, line in enumerate(lines[1:], start=1)
+            if line.strip() == "---"
+        )
+    except StopIteration:
+        return raw
+    try:
+        frontmatter = yaml.safe_load("\n".join(lines[1:end]))
+    except yaml.YAMLError:
+        return raw
+    if not isinstance(frontmatter, dict):
+        return raw
+    lines[:end + 1] = [""] * (end + 1)
+    return "\n".join(lines)
+
+
+def _is_markdown_table_start(lines: list[str], index: int) -> bool:
+    if index + 1 >= len(lines):
+        return False
+    return "|" in lines[index] and bool(_MARKDOWN_TABLE_SEPARATOR.match(lines[index + 1]))
+
+
 def _parse_text(content: bytes, extension: str) -> ParsedDocument:
     raw = _decode_text(content).replace("\r\n", "\n").replace("\r", "\n")
+    body = _strip_markdown_frontmatter(raw) if extension != ".txt" else raw
+    lines = body.split("\n")
     heading_path: list[str] = []
     blocks: list[ParsedBlock] = []
-    paragraph: list[str] = []
-    start_line = 1
+    table_no = 0
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        heading = re.match(r"^(#{1,6})\s+(.+?)\s*$", line) if extension != ".txt" else None
+        if heading:
+            level = len(heading.group(1))
+            title = heading.group(2).strip()
+            heading_path[:] = heading_path[: level - 1]
+            heading_path.append(title)
+            index += 1
+            continue
+        if not line.strip():
+            index += 1
+            continue
+        if extension != ".txt" and _is_markdown_table_start(lines, index):
+            start = index
+            table_lines: list[str] = []
+            while index < len(lines) and lines[index].strip() and "|" in lines[index]:
+                table_lines.append(lines[index].strip())
+                index += 1
+            if len(table_lines) >= 2:
+                table_no += 1
+                blocks.append(ParsedBlock(
+                    text="\n".join(table_lines),
+                    locator={
+                        "heading_path": list(heading_path),
+                        "kind": "table",
+                        "table_format": "markdown",
+                        "table_no": table_no,
+                        "row_start": 1,
+                        "row_end": max(1, len(table_lines) - 2),
+                        "line_start": start + 1,
+                        "line_end": index,
+                    },
+                ))
+                continue
+            index = start
 
-    def flush(end_line: int) -> None:
-        nonlocal paragraph, start_line
+        start = index
+        paragraph: list[str] = []
+        while index < len(lines):
+            candidate = lines[index]
+            if not candidate.strip():
+                break
+            if extension != ".txt" and re.match(r"^(#{1,6})\s+(.+?)\s*$", candidate):
+                break
+            if extension != ".txt" and _is_markdown_table_start(lines, index):
+                break
+            paragraph.append(candidate.strip())
+            index += 1
         text = "\n".join(paragraph).strip()
         if text:
             blocks.append(ParsedBlock(
                 text=text,
                 locator={
                     "heading_path": list(heading_path),
-                    "line_start": start_line,
-                    "line_end": end_line,
+                    "kind": "list" if any(_MARKDOWN_LIST_ITEM.match(item) for item in paragraph) else "paragraph",
+                    "line_start": start + 1,
+                    "line_end": index,
                 },
             ))
-        paragraph = []
-
-    for line_no, line in enumerate(raw.split("\n"), start=1):
-        heading = re.match(r"^(#{1,6})\s+(.+?)\s*$", line) if extension != ".txt" else None
-        if heading:
-            flush(line_no - 1)
-            level = len(heading.group(1))
-            title = heading.group(2).strip()
-            heading_path[:] = heading_path[: level - 1]
-            heading_path.append(title)
-            start_line = line_no + 1
-        elif line.strip():
-            if not paragraph:
-                start_line = line_no
-            paragraph.append(line.strip())
-        else:
-            flush(line_no - 1)
-            start_line = line_no + 1
-    flush(len(raw.split("\n")))
-    if not blocks and raw.strip():
-        blocks = [ParsedBlock(raw.strip(), {"line_start": 1, "line_end": raw.count("\n") + 1})]
+        elif index == start:
+            index += 1
+    if not blocks and body.strip():
+        blocks = [ParsedBlock(
+            body.strip(),
+            {"kind": "paragraph", "line_start": 1, "line_end": raw.count("\n") + 1},
+        )]
 
     if extension == ".txt":
         preview_html = f"<pre>{html.escape(raw)}</pre>"
     else:
-        rendered = markdown_renderer.markdown(raw, extensions=["extra", "sane_lists"])
+        rendered = markdown_renderer.markdown(body, extensions=["extra", "sane_lists"])
         preview_html = bleach.clean(
             rendered,
             tags=["p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "strong", "em", "code", "pre", "blockquote", "table", "thead", "tbody", "tr", "th", "td", "a", "br"],
@@ -495,77 +587,203 @@ def _parse_docx(content: bytes) -> ParsedDocument:
     heading_path: list[str] = []
     blocks: list[ParsedBlock] = []
     preview: list[str] = []
-    for index, paragraph in enumerate(document.paragraphs, start=1):
-        text = paragraph.text.strip()
-        if not text:
+    paragraph_no = 0
+    table_no = 0
+    for child in document.element.body.iterchildren():
+        if child.tag.endswith("}p"):
+            paragraph_no += 1
+            paragraph = Paragraph(child, document)
+            text = paragraph.text.strip()
+            if not text:
+                continue
+            style_name = (getattr(paragraph.style, "name", "") or "").lower()
+            match = re.search(r"(?:heading|标题)\s*(\d+)", style_name)
+            if match:
+                level = int(match.group(1))
+                heading_path[:] = heading_path[: level - 1]
+                heading_path.append(text)
+                preview.append(f"<h{min(level, 6)}>{html.escape(text)}</h{min(level, 6)}>")
+                continue
+            blocks.append(ParsedBlock(
+                text=text,
+                locator={
+                    "heading_path": list(heading_path),
+                    "kind": "paragraph",
+                    "paragraph_start": paragraph_no,
+                    "paragraph_end": paragraph_no,
+                },
+            ))
+            preview.append(f"<p>{html.escape(text)}</p>")
             continue
-        style_name = (getattr(paragraph.style, "name", "") or "").lower()
-        match = re.search(r"(?:heading|标题)\s*(\d+)", style_name)
-        if match:
-            level = int(match.group(1))
-            heading_path[:] = heading_path[: level - 1]
-            heading_path.append(text)
-            preview.append(f"<h{min(level, 6)}>{html.escape(text)}</h{min(level, 6)}>")
+        if not child.tag.endswith("}tbl"):
             continue
-        blocks.append(ParsedBlock(
-            text=text,
-            locator={"heading_path": list(heading_path), "paragraph_start": index, "paragraph_end": index},
-        ))
-        preview.append(f"<p>{html.escape(text)}</p>")
-
-    for table_index, table in enumerate(document.tables, start=1):
+        table_no += 1
+        table = Table(child, document)
         rows = [" | ".join(cell.text.strip() for cell in row.cells).strip() for row in table.rows]
         table_text = "\n".join(row for row in rows if row)
         if table_text:
             blocks.append(ParsedBlock(
                 text=table_text,
-                locator={"heading_path": list(heading_path), "table_no": table_index},
+                locator={
+                    "heading_path": list(heading_path),
+                    "kind": "table",
+                    "table_format": "docx",
+                    "table_no": table_no,
+                    "row_start": 1,
+                    "row_end": max(1, len(rows) - 1),
+                },
             ))
             preview.append(f"<pre>{html.escape(table_text)}</pre>")
+
     if not blocks:
         raise ValueError("DOCX 中没有可解析的正文内容")
     return ParsedDocument(parser="docx", blocks=blocks, preview_html="\n".join(preview))
 
 
+def _section_key(locator: dict[str, Any]) -> tuple[str, ...]:
+    heading_path = locator.get("heading_path")
+    if not isinstance(heading_path, list):
+        return ()
+    return tuple(str(item) for item in heading_path if str(item))
+
+
+def _split_prose(text: str) -> list[str]:
+    """Split long prose at a natural boundary and retain a small local overlap."""
+    remaining = text.strip()
+    parts: list[str] = []
+    while len(remaining) > _MAX_CHUNK_CHARS:
+        candidate = remaining[:_MAX_CHUNK_CHARS]
+        boundaries = [
+            candidate.rfind(boundary, _MIN_CHUNK_CHARS)
+            for boundary in _SENTENCE_BOUNDARIES
+        ]
+        end = max(boundaries) + 1
+        if end <= _MIN_CHUNK_CHARS:
+            end = _MAX_CHUNK_CHARS
+        parts.append(remaining[:end].strip())
+        overlap = remaining[max(0, end - _CHUNK_OVERLAP_CHARS):end].strip()
+        remaining = f"{overlap}{remaining[end:]}".strip()
+    if remaining:
+        parts.append(remaining)
+    return parts
+
+
+def _table_chunks(block: ParsedBlock) -> list[tuple[str, dict[str, Any]]]:
+    """Keep Markdown table rows independently citable and repeat headers when split."""
+    if len(block.text) <= _MAX_CHUNK_CHARS:
+        return [(block.text, dict(block.locator))]
+    lines = block.text.split("\n")
+    if len(lines) < 2:
+        return [(part, dict(block.locator)) for part in _split_prose(block.text)]
+    if block.locator.get("table_format") == "markdown":
+        if len(lines) < 3:
+            return [(part, dict(block.locator)) for part in _split_prose(block.text)]
+        prefix = lines[:2]
+        rows = lines[2:]
+    else:
+        prefix = lines[:1]
+        rows = lines[1:]
+    chunks: list[tuple[str, dict[str, Any]]] = []
+    current_rows: list[str] = []
+    row_start = 1
+
+    def flush_rows() -> None:
+        nonlocal current_rows, row_start
+        if not current_rows:
+            return
+        locator = dict(block.locator)
+        locator["row_start"] = row_start
+        locator["row_end"] = row_start + len(current_rows) - 1
+        chunks.append(("\n".join([*prefix, *current_rows]), locator))
+        row_start += len(current_rows)
+        current_rows = []
+
+    for row in rows:
+        projected = "\n".join([*prefix, *current_rows, row])
+        if current_rows and len(projected) > _MAX_CHUNK_CHARS:
+            flush_rows()
+        if len("\n".join([*prefix, row])) > _MAX_CHUNK_CHARS:
+            for part in _split_prose(row):
+                locator = dict(block.locator)
+                locator["row_start"] = row_start
+                locator["row_end"] = row_start
+                chunks.append(("\n".join([*prefix, part]), locator))
+            row_start += 1
+            continue
+        current_rows.append(row)
+    flush_rows()
+    return chunks
+
+
+def _merged_locator(first: dict[str, Any], last: dict[str, Any]) -> dict[str, Any]:
+    locator = dict(first)
+    if first.get("kind") != last.get("kind"):
+        locator["kind"] = "section"
+    for key in ("line_end", "paragraph_end"):
+        if key in last:
+            locator[key] = last[key]
+    return locator
+
+
 def chunk_blocks(blocks: list[ParsedBlock]) -> list[tuple[str, dict[str, Any]]]:
-    """Keep source locations while packing paragraphs into bounded chunks."""
+    """Create heading-scoped, citation-friendly chunks without cross-section overlap."""
     chunks: list[tuple[str, dict[str, Any]]] = []
     buffer: list[str] = []
     first_locator: dict[str, Any] | None = None
     last_locator: dict[str, Any] | None = None
+    active_section: tuple[str, ...] | None = None
 
     def flush() -> None:
-        nonlocal buffer, first_locator, last_locator
-        text = "\n\n".join(buffer).strip()
-        if text and first_locator is not None:
-            locator = dict(first_locator)
-            if last_locator:
-                for key in ("line_end", "paragraph_end"):
-                    if key in last_locator:
-                        locator[key] = last_locator[key]
-            chunks.append((text, locator))
-        overlap = text[-_CHUNK_OVERLAP_CHARS:].strip() if text else ""
-        buffer = [overlap] if overlap else []
-        first_locator = last_locator
+        nonlocal buffer, first_locator, last_locator, active_section
+        if buffer and first_locator is not None and last_locator is not None:
+            chunks.append(("\n\n".join(buffer).strip(), _merged_locator(first_locator, last_locator)))
+        buffer = []
+        first_locator = None
+        last_locator = None
+        active_section = None
 
     for block in blocks:
         text = block.text.strip()
         if not text:
             continue
-        while len(text) > _MAX_CHUNK_CHARS:
-            segment, text = text[:_MAX_CHUNK_CHARS], text[_MAX_CHUNK_CHARS - _CHUNK_OVERLAP_CHARS:]
-            if buffer:
-                flush()
-            chunks.append((segment, dict(block.locator)))
-        projected = len("\n\n".join(buffer + [text]))
-        if buffer and projected > _MAX_CHUNK_CHARS:
+        section = _section_key(block.locator)
+        if buffer and section != active_section:
             flush()
-        if not buffer:
-            first_locator = dict(block.locator)
-        buffer.append(text)
-        last_locator = dict(block.locator)
+        if block.locator.get("kind") == "table":
+            flush()
+            chunks.extend(_table_chunks(block))
+            continue
+        for part in _split_prose(text):
+            current_size = len("\n\n".join(buffer))
+            projected = len("\n\n".join([*buffer, part]))
+            if buffer and (
+                projected > _MAX_CHUNK_CHARS
+                or (projected > _TARGET_CHUNK_CHARS and current_size >= _MIN_CHUNK_CHARS)
+            ):
+                flush()
+            if not buffer:
+                first_locator = dict(block.locator)
+                active_section = section
+            buffer.append(part)
+            last_locator = dict(block.locator)
     flush()
     return chunks
+
+
+def embedding_text_for(
+    document_title: str,
+    content: str,
+    locator: dict[str, Any],
+) -> str:
+    """Give embeddings title and section context while keeping citations verbatim."""
+    heading_path = locator.get("heading_path")
+    headings = " / ".join(
+        str(item).strip()
+        for item in heading_path
+        if str(item).strip()
+    ) if isinstance(heading_path, list) else ""
+    context = [item for item in (document_title.strip(), headings) if item]
+    return "\n".join([*context, content])
 
 
 def _metadata_matches(version: KnowledgeDocumentVersion, scene: dict[str, str]) -> bool:
@@ -758,15 +976,20 @@ class KnowledgeRetrievalService:
             )
             db_chunks = {chunk.id: chunk for chunk in (await db.execute(stmt)).scalars().all()}
 
-        query_terms = {term for term in re.findall(r"[\w\u4e00-\u9fff]+", query.casefold()) if len(term) > 1}
+        query_terms = retrieval_terms(query)
         ranked: list[tuple[float, EvidenceContext]] = []
         source_weight = {"methodology": 0.10, "benchmark_rule": 0.08, "case_sop": 0.05}
         for rank, (chunk_id, semantic_score) in enumerate(recalled, start=1):
             chunk = db_chunks.get(chunk_id)
             if not chunk or not _metadata_matches(chunk.version, filter_scene):
                 continue
-            text_terms = set(re.findall(r"[\w\u4e00-\u9fff]+", chunk.content.casefold()))
-            keyword_score = len(query_terms & text_terms) / max(len(query_terms), 1)
+            text_terms = retrieval_terms(chunk.content)
+            heading_terms = retrieval_terms(" ".join(
+                str(item) for item in (chunk.locator or {}).get("heading_path", [])
+            ))
+            content_match = len(query_terms & text_terms) / max(len(query_terms), 1)
+            heading_match = len(query_terms & heading_terms) / max(len(query_terms), 1)
+            keyword_score = min(1.0, content_match + heading_match * 0.35)
             type_weight = source_weight.get(chunk.version.source_type, 0)
             scene_boost = _scene_match_count(chunk.version, ranking_scene) * _SCENE_MATCH_BOOST
             score = semantic_score + keyword_score * 0.15 + type_weight + scene_boost
@@ -892,7 +1115,15 @@ class KnowledgeIngestionService:
             chunk_data = chunk_blocks(parsed.blocks)
             if not chunk_data:
                 raise ValueError("未提取到可索引的正文内容")
-            vectors = await self._embedding_service.embed([text for text, _ in chunk_data])
+            async with self._session_factory() as db:
+                document = await db.get(KnowledgeDocument, version.document_id)
+                if document is None:
+                    raise ValueError("知识资料不存在")
+                document_title = document.title
+            vectors = await self._embedding_service.embed([
+                embedding_text_for(document_title, text, locator)
+                for text, locator in chunk_data
+            ])
             if len(vectors) != len(chunk_data):
                 raise RuntimeError("嵌入服务返回的向量数量不正确")
 

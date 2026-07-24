@@ -530,20 +530,38 @@ function formatPercent(value: number): string {
   return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}%`;
 }
 
+function formatLocatorRange(start: number, end: number, unit: string): string {
+  return start === end ? `第 ${start} ${unit}` : `第 ${start}-${end} ${unit}`;
+}
+
+function formatTableRowRange(start: number, end: number): string {
+  return start === end ? `数据行 ${start}` : `数据行 ${start}-${end}`;
+}
+
 function locatorLabel(locator: Record<string, unknown>): string {
   const parts: string[] = [];
   if (Array.isArray(locator.heading_path)) {
     const headings = locator.heading_path.filter((item): item is string => typeof item === "string" && Boolean(item));
     if (headings.length > 0) parts.push(headings.join(" / "));
   }
+  if (typeof locator.table_no === "number") {
+    if (typeof locator.line_start === "number") {
+      const end = typeof locator.line_end === "number" ? locator.line_end : locator.line_start;
+      parts.push(formatLocatorRange(locator.line_start, end, "行"));
+    }
+    parts.push(`表格 ${locator.table_no}`);
+    if (typeof locator.row_start === "number") {
+      const end = typeof locator.row_end === "number" ? locator.row_end : locator.row_start;
+      parts.push(formatTableRowRange(locator.row_start, end));
+    }
+    return parts.join(" · ");
+  }
   if (typeof locator.line_start === "number") {
     const end = typeof locator.line_end === "number" ? locator.line_end : locator.line_start;
-    parts.push(locator.line_start === end ? `第 ${locator.line_start} 行` : `第 ${locator.line_start}–${end} 行`);
+    parts.push(formatLocatorRange(locator.line_start, end, "行"));
   } else if (typeof locator.paragraph_start === "number") {
     const end = typeof locator.paragraph_end === "number" ? locator.paragraph_end : locator.paragraph_start;
-    parts.push(locator.paragraph_start === end ? `第 ${locator.paragraph_start} 段` : `第 ${locator.paragraph_start}–${end} 段`);
-  } else if (typeof locator.table_no === "number") {
-    parts.push(`表格 ${locator.table_no}`);
+    parts.push(formatLocatorRange(locator.paragraph_start, end, "段"));
   }
   return parts.join(" · ");
 }
